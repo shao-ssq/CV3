@@ -89,10 +89,10 @@ class CosyVoice2Model(nn.Module, SupportsLoRA, SupportsPP):
         self.model = Qwen2Model(vllm_config=vllm_config,
                               prefix=maybe_prefix(prefix, "model"))
 
-        # self.llm_decoder = nn.Linear(self.llm_output_size, self.speech_token_size)
+        # 注意：原始 CosyVoice3LM 是 bias=False
         self.llm_decoder = ParallelLMHead(self.speech_token_size,
                                       self.llm_output_size,
-                                      bias=True,
+                                      bias=False,
                                       quant_config=quant_config,
                                       prefix=maybe_prefix(
                                           prefix, "llm_decoder"))
@@ -118,87 +118,90 @@ class CosyVoice2Model(nn.Module, SupportsLoRA, SupportsPP):
 
         self.mix_ratio: List[int] = [5, 15]
 
-        # 定义特殊token常量
-        self.llm_token_id_delta = torch.tensor(self.speech_token_size, dtype=torch.int32)
-        self.sos_eos_token_id = torch.tensor((self.llm_token_id_delta + self.llm_token_size + 1), dtype=torch.int32)  # 163840 + 6564 = 170404
-        self.task_token_id = self.sos_eos_token_id + torch.tensor(1, dtype=torch.int32)  # 170405
-        self.zero_token_id = self.task_token_id + torch.tensor(1, dtype=torch.int32)
+        # CosyVoice3 token 编码方案：
+        # - 基础语音 token: 0 ~ 6560 (6561个)
+        # - 特殊 token: 6561 ~ 6760 (200个，包括 sos, eos, task, fill 等)
+        #
+        # 新的token编码方案：使用 vocab_size 作为分界点，确保 text tokens 和 speech tokens 不重叠
+        # - text tokens: 0 ~ vocab_size-1 (原始 Qwen2 tokenizer 值)
+        # - speech tokens: vocab_size ~ vocab_size + speech_token_size - 1
+        # 注意：vLLM processor.py 中的 token 验证已被禁用，以支持扩展的 token ID 范围
+        self.base_speech_token_size = 6561  # 基础语音token数量
+        self.speech_token_offset = config.vocab_size  # 151936，使用 vocab_size 作为偏移
+
+        # CosyVoice3 的特殊 token (使用 speech_embedding)
+        # 原始值: sos=6561, eos=6562, task=6563, fill=6564
+        # 加偏移后:
+        self.sos_eos_token_id = self.speech_token_offset + self.base_speech_token_size + 0   # 151936 + 6561 = 158497
+        self.eos_token_id = self.speech_token_offset + self.base_speech_token_size + 1       # 158498
+        self.task_token_id = self.speech_token_offset + self.base_speech_token_size + 2      # 158499
+        self.fill_token_id = self.speech_token_offset + self.base_speech_token_size + 3      # 158500
+
+        # zero_token 用于填充
+        self.zero_token_id = self.speech_token_offset + self.speech_token_size  # 158697
 
         self.zero_embed_buffer = torch.zeros(
             (vllm_config.scheduler_config.max_num_seqs, self.llm_input_size),
-            dtype=self.llm_embedding.weight.dtype,
-            device=self.llm_embedding.weight.device
+            dtype=self.speech_embedding.weight.dtype,
+            device=self.speech_embedding.weight.device
         )
         self.inputs_embed_buffer = torch.zeros(
             (vllm_config.scheduler_config.max_num_batched_tokens, self.llm_input_size),
-            dtype=self.llm_embedding.weight.dtype,
-            device=self.llm_embedding.weight.device,
+            dtype=self.speech_embedding.weight.dtype,
+            device=self.speech_embedding.weight.device,
         )
 
     def get_sos_eos_emb(self):
-        return self.llm_embedding.weight[self.sos_eos].reshape(1, 1, -1)
+        # CosyVoice3: sos = 6561，使用 speech_embedding
+        return self.speech_embedding.weight[self.base_speech_token_size + 0].reshape(1, 1, -1)
 
     def get_task_id_emb(self):
-        return self.llm_embedding.weight[self.task_id].reshape(1, 1, -1)
+        # CosyVoice3: task = 6563，使用 speech_embedding
+        return self.speech_embedding.weight[self.base_speech_token_size + 2].reshape(1, 1, -1)
 
     def get_input_embeddings(
         self,
         input_ids: torch.Tensor,
         multimodal_embeddings: Optional[T] = None,
-        attn_metadata: Optional["AttentionMetadata"] = None,
     ) -> torch.Tensor:
         """
-        Returns the input embeddings merged from the text embeddings from
-        input_ids and the multimodal embeddings generated from multimodal
-        kwargs.
+        CosyVoice3 token 编码方案（使用 vocab_size 作为分界点，确保不重叠）：
+        - text tokens: 0 ~ vocab_size-1 (原始 Qwen2 tokenizer 值，使用 model.get_input_embeddings)
+        - speech tokens (包括特殊token): vocab_size ~ vocab_size+speech_token_size-1
+          即 151936 ~ 158696 (减去偏移后使用 speech_embedding，索引 0~6760)
+        - zero_token: 用于填充，嵌入为零向量
         """
-        # 创建掩码，标记哪些 token_id 属于音频 Token
-        mask = input_ids < self.speech_token_size
-
         # 获取 input_ids 的原始形状
         input_shape = input_ids.shape
-        # 展平 input_ids 和掩码以便统一处理
         flat_input_ids = input_ids.view(-1)
-        flat_mask = mask.view(-1)
 
         inputs_embeds = self.inputs_embed_buffer[:flat_input_ids.shape[0]]
         inputs_embeds.zero_()
 
-        # Process speech tokens
-        if flat_mask.any():
-            speech_token_ids = flat_input_ids[flat_mask]
-            inputs_embeds[flat_mask] = self.speech_embedding(speech_token_ids)
+        # 创建各类型 token 的掩码
+        # text tokens: < speech_token_offset (< 151936)
+        text_mask = flat_input_ids < self.speech_token_offset
+        # speech tokens (包括 sos, eos, task, fill 等特殊token): speech_token_offset ~ speech_token_offset+speech_token_size-1
+        # 即 151936 ~ 158696
+        speech_max_id = self.speech_token_offset + self.speech_token_size
+        speech_mask = (flat_input_ids >= self.speech_token_offset) & (flat_input_ids < speech_max_id)
+        # zero token: 特殊填充token
+        zero_mask = flat_input_ids == self.zero_token_id
 
-        # 处理大于 delta 的 token_id
-        if (~flat_mask).any():
-            llm_token_ids = flat_input_ids[~flat_mask]
-            llm_embeds = torch.zeros_like(inputs_embeds[~flat_mask])
+        # 处理 text tokens
+        if text_mask.any():
+            text_token_ids = flat_input_ids[text_mask]
+            inputs_embeds[text_mask] = self.model.get_input_embeddings(text_token_ids)
 
-            sos_eos_mask = llm_token_ids == self.sos_eos_token_id
-            task_mask = llm_token_ids == self.task_token_id
-            zero_mask = llm_token_ids == self.zero_token_id
-            normal_mask = ~(sos_eos_mask | task_mask | zero_mask)
+        # 处理 speech tokens (减去偏移得到原始 speech token id: 0~6760)
+        # 这包括基础语音token (0~6560) 和特殊token (6561~6760)
+        if speech_mask.any():
+            speech_token_ids = flat_input_ids[speech_mask] - self.speech_token_offset
+            inputs_embeds[speech_mask] = self.speech_embedding(speech_token_ids)
 
-            # 分层处理逻辑
-            # 第一优先级：SOS/EOS标记
-            if sos_eos_mask.any():
-                llm_embeds[sos_eos_mask] = self.llm_embedding.weight[self.sos_eos].unsqueeze(0)
-
-            # 第二优先级：任务标记
-            if task_mask.any():
-                llm_embeds[task_mask] = self.llm_embedding.weight[self.task_id].unsqueeze(0)
-
-            # 第二优先级：空音频标记
-            if zero_mask.any():
-                llm_embeds[zero_mask] = self.zero_embed_buffer[:len(llm_embeds[zero_mask])]
-
-            # 常规LLM token
-            if normal_mask.any():
-                original_ids = llm_token_ids[normal_mask] - self.llm_token_id_delta
-                # print('original_ids: ',original_ids)
-                llm_embeds[normal_mask] = self.model.get_input_embeddings(original_ids)
-
-            inputs_embeds[~flat_mask] = llm_embeds
+        # 处理 zero token (填充用)
+        if zero_mask.any():
+            inputs_embeds[zero_mask] = self.zero_embed_buffer[:zero_mask.sum()]
 
         inputs_embeds = inputs_embeds.view(*input_shape, self.llm_input_size)
 
@@ -214,28 +217,44 @@ class CosyVoice2Model(nn.Module, SupportsLoRA, SupportsPP):
         self,
         input_ids: torch.Tensor,
         positions: torch.Tensor,
-        kv_caches: List[torch.Tensor],
-        attn_metadata: AttentionMetadata,
         intermediate_tensors: Optional[IntermediateTensors] = None,
         inputs_embeds: Optional[torch.Tensor] = None,
     ) -> Union[torch.Tensor, IntermediateTensors]:
+        logger.debug(f"CosyVoice2Model.forward called with input_ids shape: {input_ids.shape}")
         if inputs_embeds is None:
-            inputs_embeds = self.get_input_embeddings(
-                input_ids,
-                attn_metadata=attn_metadata,
-            )
-        return self.model(input_ids, positions, kv_caches,
-                        attn_metadata, intermediate_tensors,
-                        inputs_embeds)
+            inputs_embeds = self.get_input_embeddings(input_ids)
+        return self.model(
+            input_ids=input_ids,
+            positions=positions,
+            intermediate_tensors=intermediate_tensors,
+            inputs_embeds=inputs_embeds,
+        )
 
     def compute_logits(
         self,
         hidden_states: torch.Tensor,
         sampling_metadata: SamplingMetadata,
     ) -> Optional[torch.Tensor]:
-        logits = self.logits_processor(self.llm_decoder, hidden_states,
-                                       sampling_metadata)
-        return logits
+        # llm_decoder 输出 speech_token_size (6761) 个类别的 logits
+        speech_logits = self.logits_processor(self.llm_decoder, hidden_states,
+                                              sampling_metadata)
+        if speech_logits is None:
+            return None
+
+        # 创建完整的 logits tensor，大小需要容纳所有 speech tokens
+        # speech tokens 在 speech_token_offset ~ speech_token_offset + speech_token_size - 1
+        # 即 151936 ~ 158696，所以需要 158697 大小的 tensor
+        batch_size = speech_logits.shape[0]
+        total_size = self.speech_token_offset + self.speech_token_size  # 151936 + 6761 = 158697
+        full_logits = torch.full(
+            (batch_size, total_size),
+            float('-inf'),
+            dtype=speech_logits.dtype,
+            device=speech_logits.device
+        )
+        # 将 speech logits 放到正确的位置 (speech_token_offset ~ speech_token_offset + speech_token_size)
+        full_logits[:, self.speech_token_offset:self.speech_token_offset + self.speech_token_size] = speech_logits
+        return full_logits
 
     def sample(
         self,
@@ -248,14 +267,19 @@ class CosyVoice2Model(nn.Module, SupportsLoRA, SupportsPP):
     @staticmethod
     def convert_weights(weights: Iterable[Tuple[str, torch.Tensor]]) -> Iterable[Tuple[str, torch.Tensor]]:
         for name, param in weights:
-            # 处理Qwen2Model核心参数
-            if name.startswith("llm."):
-                if name.startswith("llm.model.model."):
-                    name = name.replace("llm.model.model.", "model.")
-                else:
-                    continue
-            # print('weights name: ', name)
-            yield name, param
+            # 处理 Qwen2Model 核心参数: llm.model.model.* -> model.*
+            if name.startswith("llm.model.model."):
+                name = name.replace("llm.model.model.", "model.")
+                yield name, param
+            # 处理 speech_embedding (顶层，无 llm. 前缀)
+            elif name.startswith("speech_embedding."):
+                yield name, param
+            # 处理 llm_decoder (顶层，无 llm. 前缀)
+            elif name.startswith("llm_decoder."):
+                yield name, param
+            # 跳过其他权重
+            else:
+                continue
 
     def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
         weights = self.convert_weights(weights)
