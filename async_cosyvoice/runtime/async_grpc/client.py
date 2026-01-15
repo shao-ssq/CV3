@@ -222,6 +222,7 @@ if __name__ == "__main__":
     parser.add_argument('--target_sr', type=int, default=24000, help='输出音频的目标采样率 cosyvoice2 为 24000')
     parser.add_argument('--max_conc', type=int, default=4, help='最大并发数')
     parser.add_argument('--input_file', type=str, default='', help='输入需要合成音频文本的文件路径，单行文本为一个语音合成请求，将并发合成音频，并通过--max_conc设置并发数')
+    parser.add_argument('--repeat', type=int, default=10, help='重复执行次数，默认为1次')
     args = parser.parse_args()
 
     if args.mode == 'register_spk':
@@ -230,7 +231,22 @@ if __name__ == "__main__":
         if args.input_file:
             multiprocess_main(args)
         else:
-            asyncio.run(main(args))
+            # 重复执行指定次数
+            for i in range(args.repeat):
+                logging.info(f'========== 开始第 {i+1}/{args.repeat} 次执行 ==========')
+                # 如果指定了重复次数，自动给输出文件添加序号
+                if args.repeat > 1:
+                    base_path = args.output_path
+                    # 分离文件名和扩展名
+                    if '.' in base_path:
+                        name_part = base_path.rsplit('.', 1)[0]
+                        ext_part = base_path.rsplit('.', 1)[1]
+                        args.output_path = f"{name_part}_{i+1}.{ext_part}"
+                    else:
+                        args.output_path = f"{base_path}_{i+1}"
+
+                asyncio.run(main(args))
+                logging.info(f'========== 第 {i+1}/{args.repeat} 次执行完成 ==========\n')
 
     # python client.py --mode zero_shot_by_spk_id --spk_id 001 --stream_input --tts_text 你好，请问有什么可以帮您的吗？ --stream
     # python client.py --mode zero_shot_by_spk_id --spk_id 001 --input_file text.txt --max_conc 10 --output_path output
