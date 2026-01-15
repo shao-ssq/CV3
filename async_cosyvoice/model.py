@@ -73,6 +73,7 @@ class CosyVoice2Model:
         self.llm_engine: AsyncLLMEngine = AsyncLLMEngine.from_engine_args(engine_args)
         self.thread_count = 10
         self.thread_executor = ThreadPoolExecutor(max_workers=self.thread_count)
+
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
         self.stream_pool = queue.Queue()
@@ -110,31 +111,26 @@ class CosyVoice2Model:
         self.llm_end_dict = {}
         self.hift_cache_dict = {}
 
-        # 与vllm中的模型保持一致 (CosyVoice3 token 编码方案)
-        # - 基础语音 token: 0 ~ 6560 (6561个)
-        # - 特殊 token: 6561 ~ 6760 (200个，包括 sos, eos, task, fill 等)
-        self.speech_token_size = 6761  # CosyVoice3: 6561+200=6761
-        self.base_speech_token_size = 6561  # 基础语音token数量
-        self.vocab_size = 151936  # Qwen2 vocab_size
+        # 与vllm中的模型保持一致 (简化的 CosyVoice3 token 编码方案)
+        # - speech tokens (包括特殊token): 0 ~ 6760
+        #   - 基础语音 token: 0 ~ 6560 (6561个)
+        #   - 特殊 token: 6561 ~ 6760 (200个，包括 sos, eos, task, fill 等)
+        # - text tokens: >= 6761 (原始 Qwen2 tokenizer 值 + 6761)
+        speech_token_size = 6561
+        self.speech_token_num = speech_token_size + 200  # 6761
+        self.base_speech_token_size = speech_token_size  # 6561
 
-        # 新的token编码方案：使用 vocab_size 作为分界点，确保 text tokens 和 speech tokens 不重叠
-        # - text tokens: 0 ~ vocab_size-1 (原始 Qwen2 tokenizer 值)
-        # - speech tokens: vocab_size ~ vocab_size + speech_token_size - 1
-        self.speech_token_offset = self.vocab_size  # 151936
-        self.text_token_offset = 0  # 文本token不加偏移，直接使用原始值
+        # llm_token_id_delta 作为分界点
+        self.llm_token_id_delta = self.speech_token_num  # 6761
 
-        # CosyVoice3 的特殊 token (原始值: sos=6561, eos=6562, task=6563, fill=6564)
-        # 加偏移后:
-        self.sos_eos_token_id = self.speech_token_offset + self.base_speech_token_size + 0   # 158497
-        self.eos_token_id = self.speech_token_offset + self.base_speech_token_size + 1       # 158498
-        self.task_token_id = self.speech_token_offset + self.base_speech_token_size + 2      # 158499
-        self.fill_token_id = self.speech_token_offset + self.base_speech_token_size + 3      # 158500
-        self.zero_token_id = self.speech_token_offset + self.speech_token_size               # 158697
+        # 特殊 token IDs (在 speech token 范围内)
+        self.sos_eos_token_id = self.base_speech_token_size + 0  # 6561
+        self.eos_token_id = self.base_speech_token_size + 1      # 6562
+        self.task_token_id = self.base_speech_token_size + 2     # 6563
+        self.fill_token_id = self.base_speech_token_size + 3     # 6564
 
-        # CosyVoice3: stop_token_ids 包含所有200个特殊token (索引 6561~6760)
-        # 加偏移后: [151936+6561, ..., 151936+6760] = [158497, ..., 158696]
-        self.stop_token_ids = list(range(self.speech_token_offset + self.base_speech_token_size,
-                                         self.speech_token_offset + self.speech_token_size))
+        # stop_token_ids 包含所有200个特殊token (6561~6760)
+        self.stop_token_ids = list(range(self.base_speech_token_size, self.speech_token_num))
 
         # vllm 的推理任务需要在一个固定的事件循环中，因此启动一个后台线程专用于推理任务
         self.background_loop = asyncio.new_event_loop()
@@ -172,35 +168,18 @@ class CosyVoice2Model:
         self.flow.decoder.estimator = EstimatorWrapper(self.flow.decoder.estimator_engine, estimator_count=ESTIMATOR_COUNT)
 
     async def background_llm_inference(self, out_queue, prompt_token_ids, request_id, stop_token_ids, max_tokens):
-        logging.info(f'background_llm_inference started, request_id: {request_id}, prompt_len: {len(prompt_token_ids)}')
-        logging.info(f'prompt_token_ids first 10: {prompt_token_ids[:10]}, last 10: {prompt_token_ids[-10:]}')
         sampling_params = SamplingParams(**SAMPLING_PARAMS)
-        sampling_params.stop_token_ids = stop_token_ids or self.stop_token_ids
-        logging.info(f'stop_token_ids count: {len(sampling_params.stop_token_ids)}, first: {sampling_params.stop_token_ids[0] if sampling_params.stop_token_ids else None}')
+        sampling_params.stop_token_ids = stop_token_ids or [6561, 6563]
         if max_tokens:
             sampling_params.max_tokens = max_tokens
-        import sys
-        logging.info(f'about to call llm_engine.generate, max_tokens: {sampling_params.max_tokens}')
-        import sys
-        sys.stdout.flush()
-        sys.stderr.flush()
-        logging.info(f'calling llm_engine.generate with prompt_token_ids len: {len(prompt_token_ids)}')
-        try:
-            output_count = 0
-            async for output in self.llm_engine.generate(
-                    {
-                        "prompt_token_ids": prompt_token_ids,
-                    },
-                    sampling_params=sampling_params,
-                    request_id=request_id or f"{time.time()}",
-            ):
-                output_count += 1
-                logging.info(f'llm_engine output #{output_count}, finished: {output.finished}, tokens: {len(output.outputs[0].token_ids)}')
-                out_queue.put((output.outputs[0], output.finished))
-            logging.info(f'llm_engine.generate completed, total outputs: {output_count}')
-        except Exception as e:
-            logging.error(f'llm_engine.generate error: {e}', exc_info=True)
-            raise;
+        async for output in self.llm_engine.generate(
+                {
+                    "prompt_token_ids": prompt_token_ids,
+                },
+                sampling_params=sampling_params,
+                request_id=request_id or f"{time.time()}",
+        ):
+            out_queue.put((output.outputs[0], output.finished))
 
     async def llm_inference(self, prompt_token_ids: List[int], request_id: str=None, stop_token_ids=None, max_tokens=None):
         logging.info(f'llm_inference started, request_id: {request_id}')
@@ -218,7 +197,6 @@ class CosyVoice2Model:
                     sampling_params=sampling_params,
                     request_id=request_id or f"{time.time()}",
             ):
-                logging.debug(f'llm_inference got output, finished: {output.finished}')
                 yield output.outputs[0]
         except Exception as e:
             logging.error(f'llm_engine.generate error: {e}', exc_info=True)
@@ -226,10 +204,9 @@ class CosyVoice2Model:
 
     async def llm_job(self, text, prompt_text, llm_prompt_speech_token, llm_embedding, uuid):
         logging.info(f'llm_job started, uuid: {uuid}')
-        # text tokens 不加偏移 (text_token_offset=0)
-        prompt_text = tensor_to_list(prompt_text + torch.tensor(self.text_token_offset))
-        # speech tokens 加偏移，映射到词汇表末尾
-        llm_prompt_speech_token = tensor_to_list(llm_prompt_speech_token + torch.tensor(self.speech_token_offset))
+        # 参考 model_temp.py: text tokens 加 llm_token_id_delta 偏移，speech tokens 不加偏移
+        prompt_text = tensor_to_list(prompt_text + torch.tensor(self.llm_token_id_delta))
+        llm_prompt_speech_token = tensor_to_list(llm_prompt_speech_token)
         logging.info(f'llm_job prompt_text len: {len(prompt_text)}, llm_prompt_speech_token len: {len(llm_prompt_speech_token)}')
 
         start_time = time.time()
@@ -240,7 +217,7 @@ class CosyVoice2Model:
             prompt_token_ids = [self.sos_eos_token_id]
             text_tokens_cache = prompt_text
             async for this_text in text:
-                this_text = tensor_to_list(this_text + torch.tensor(self.text_token_offset))
+                this_text = tensor_to_list(this_text + torch.tensor(self.llm_token_id_delta))
                 # text need tokens
                 text_tokens_cache += this_text
                 while len(llm_prompt_speech_token) != 0:
@@ -254,7 +231,6 @@ class CosyVoice2Model:
                     else:
                         break
                 if len(llm_prompt_speech_token) == 0:
-                    # 使用 self.fill_token_id (151442)
                     if (len(last_tokens) > 0 and last_tokens[-1] == self.fill_token_id) or len(prompt_token_ids) == 1:
                         if len(text_tokens_cache) >= self.mix_ratio[0]:
                             text_tokens_temp = text_tokens_cache[:self.mix_ratio[0]]
@@ -262,69 +238,43 @@ class CosyVoice2Model:
                             text_tokens_cache = text_tokens_cache[self.mix_ratio[0]:]
                         else:
                             continue
-                    # 注意：config.py 中设置了 output_kind=DELTA，所以 output.token_ids 已经是增量的
                     async for output in self.llm_inference(prompt_token_ids, request_id=uuid, stop_token_ids=[self.fill_token_id]):
-                        # DELTA 模式下，token_ids 已经是增量的，直接使用
                         new_tokens = list(output.token_ids)
 
                         if len(new_tokens) == 0:
                             continue
 
                         last_tokens = new_tokens
-                        # 检查是否是 speech token (>= speech_token_offset + base_speech_token_size)
-                        if last_tokens[-1] >= self.speech_token_offset + self.base_speech_token_size:
+                        # 检查是否是特殊 token (>= base_speech_token_size)
+                        if last_tokens[-1] >= self.base_speech_token_size:
                             need_add_tokens = last_tokens[:-1]
                         else:
                             need_add_tokens = last_tokens
-                        # 输出的 speech tokens 需要减去偏移，还原为原始值 (用于 tts_speech_token_dict)
-                        decoded_tokens = [t - self.speech_token_offset if t >= self.speech_token_offset else t for t in need_add_tokens]
-                        self.tts_speech_token_dict[uuid].extend(decoded_tokens)
-                        # prompt_token_ids 保持编码后的值
+                        # speech tokens 直接使用，不需要减去偏移
+                        self.tts_speech_token_dict[uuid].extend(need_add_tokens)
                         prompt_token_ids.extend(need_add_tokens)
 
             prompt_token_ids += text_tokens_cache + [self.task_token_id]
-            # 注意：config.py 中设置了 output_kind=DELTA，所以 output.token_ids 已经是增量的
             async for output in self.llm_inference(prompt_token_ids, request_id=uuid, stop_token_ids=self.stop_token_ids):
-                # DELTA 模式下，token_ids 已经是增量的，直接使用
                 new_tokens = list(output.token_ids)
 
                 if len(new_tokens) == 0:
                     continue
 
-                # 检查是否是 stop token (>= speech_token_offset + base_speech_token_size)
-                if new_tokens[-1] >= self.speech_token_offset + self.base_speech_token_size:
+                # 检查是否是 stop token (>= base_speech_token_size)
+                if new_tokens[-1] >= self.base_speech_token_size:
                     need_add_tokens = new_tokens[:-1]
                 else:
                     need_add_tokens = new_tokens
-                # 输出的 speech tokens 需要减去偏移，还原为原始值
-                need_add_tokens = [t - self.speech_token_offset if t >= self.speech_token_offset else t for t in need_add_tokens]
+                # speech tokens 直接使用，不需要减去偏移
                 self.tts_speech_token_dict[uuid].extend(need_add_tokens)
         else:
-            text = tensor_to_list(text + torch.tensor(self.text_token_offset))
+            text = tensor_to_list(text + torch.tensor(self.llm_token_id_delta))
             prompt_token_ids = [self.sos_eos_token_id] + prompt_text + text + \
                                [self.task_token_id] + llm_prompt_speech_token
             max_tokens = len(text) * 20
 
-            # 调试日志
-            logging.info(f'[DEBUG] prompt structure: sos={self.sos_eos_token_id}, task={self.task_token_id}')
-            logging.info(f'[DEBUG] prompt_text len={len(prompt_text)}, text len={len(text)}, speech_token len={len(llm_prompt_speech_token)}')
-            logging.info(f'[DEBUG] total prompt_token_ids len={len(prompt_token_ids)}')
-            logging.info(f'[DEBUG] speech_token_offset={self.speech_token_offset}, base_speech_token_size={self.base_speech_token_size}')
-
-            # 检查 text token 是否与 speech token 范围重叠
-            text_token_max = max(prompt_text + text) if (prompt_text + text) else 0
-            text_token_min = min(prompt_text + text) if (prompt_text + text) else 0
-            logging.info(f'[DEBUG] text token range: min={text_token_min}, max={text_token_max}')
-            if text_token_max >= self.speech_token_offset:
-                logging.warning(f'[WARNING] Text token {text_token_max} >= speech_token_offset {self.speech_token_offset}! Token ranges overlap!')
-
-            # 注意：config.py 中设置了 output_kind=DELTA，所以 output.token_ids 已经是增量的
-            output_count = 0
-
-            # 添加调试：打印 prompt_token_ids 的关键部分
-            logging.info(f'[DEBUG] prompt_token_ids first 10: {prompt_token_ids[:10]}')
-            logging.info(f'[DEBUG] prompt_token_ids last 10: {prompt_token_ids[-10:]}')
-            logging.info(f'[DEBUG] llm_prompt_speech_token first 5: {llm_prompt_speech_token[:5]}')
+            logging.info(f'llm_job non-stream: prompt_len={len(prompt_token_ids)}, max_tokens={max_tokens}')
 
             async for output in self.llm_inference(
                     prompt_token_ids,
@@ -332,30 +282,19 @@ class CosyVoice2Model:
                     stop_token_ids=self.stop_token_ids,
                     max_tokens=max_tokens,
             ):
-                output_count += 1
-                # DELTA 模式下，token_ids 已经是增量的，直接使用
                 new_tokens = list(output.token_ids)
-
-                if output_count <= 5 or output_count % 50 == 0:
-                    logging.info(f'[DEBUG] output #{output_count}: raw tokens={new_tokens} (offset={self.speech_token_offset})')
 
                 if len(new_tokens) == 0:
                     continue
 
-                # 检查是否是 stop token (>= speech_token_offset + base_speech_token_size)
-                is_stop = new_tokens[-1] >= self.speech_token_offset + self.base_speech_token_size
-                if is_stop:
+                # 检查是否是 stop token (>= base_speech_token_size)
+                if new_tokens[-1] >= self.base_speech_token_size:
                     need_add_tokens = new_tokens[:-1]
                 else:
                     need_add_tokens = new_tokens
 
-                # 输出的 speech tokens 需要减去偏移，还原为原始值
-                decoded_tokens = [t - self.speech_token_offset if t >= self.speech_token_offset else t for t in need_add_tokens]
-                if output_count <= 5:
-                    logging.info(f'[DEBUG] decoded tokens={decoded_tokens}')
-                self.tts_speech_token_dict[uuid].extend(decoded_tokens)
-
-            logging.info(f'[DEBUG] total outputs: {output_count}')
+                # speech tokens 直接使用，不需要减去偏移
+                self.tts_speech_token_dict[uuid].extend(need_add_tokens)
 
         self.llm_end_dict[uuid] = True
         tokens = self.tts_speech_token_dict[uuid]
@@ -365,60 +304,36 @@ class CosyVoice2Model:
         logging.debug(f'speech_tokens: len: {len(tokens)}  data: {tokens}')
         # 记录 prompt_token_ids self.tts_speech_token_dict[uuid] 数据用于后续的训练，与flow推理测试
 
-
-    def token2wav(self, token, prompt_token, prompt_feat, embedding, uuid, token_offset, finalize=False, speed=1.0):
-        torch.cuda.current_stream().synchronize() # 将当前流进行同步了再处理后续逻辑
-        stream = self.stream_pool.get()
-        with torch.cuda.stream(stream):
-            # 根据 fp16 设置转换数据类型
-            dtype = torch.float16 if self.fp16 else torch.float32
-            tts_mel, _ = self.flow.inference(token=token.to(self.device),
-                                             token_len=torch.tensor([token.shape[1]], dtype=torch.int32).to(self.device),
+    def token2wav(self, token, prompt_token, prompt_feat, embedding, token_offset, uuid, stream=False, finalize=False,
+                  speed=1.0):
+        with torch.amp.autocast('cuda', enabled=self.fp16):
+            tts_mel, _ = self.flow.inference(token=token.to(self.device, dtype=torch.int32),
+                                             token_len=torch.tensor([token.shape[1]], dtype=torch.int32).to(
+                                                 self.device),
                                              prompt_token=prompt_token.to(self.device),
-                                             prompt_token_len=torch.tensor([prompt_token.shape[1]], dtype=torch.int32).to(self.device),
-                                             prompt_feat=prompt_feat.to(self.device, dtype=dtype),
-                                             prompt_feat_len=torch.tensor([prompt_feat.shape[1]], dtype=torch.int32).to(self.device),
-                                             embedding=embedding.to(self.device, dtype=dtype),
-                                             streaming=True,
+                                             prompt_token_len=torch.tensor([prompt_token.shape[1]],
+                                                                           dtype=torch.int32).to(self.device),
+                                             prompt_feat=prompt_feat.to(self.device),
+                                             prompt_feat_len=torch.tensor([prompt_feat.shape[1]], dtype=torch.int32).to(
+                                                 self.device),
+                                             embedding=embedding.to(self.device),
+                                             streaming=stream,
                                              finalize=finalize)
-            tts_mel = tts_mel[:, :, token_offset * self.flow.token_mel_ratio:]
-
-            # 检查 hift 类型，CausalHiFTGenerator 使用不同的接口
-            from cosyvoice.hifigan.generator import CausalHiFTGenerator
-            is_causal_hift = isinstance(self.hift, CausalHiFTGenerator)
-
-            if is_causal_hift:
-                # CausalHiFTGenerator: 使用 finalize 参数，不需要 cache
-                if speed != 1.0 and finalize:
-                    tts_mel = F.interpolate(tts_mel, size=int(tts_mel.shape[2] / speed), mode='linear')
-                tts_speech, _ = self.hift.inference(speech_feat=tts_mel, finalize=finalize)
+            tts_mel = tts_mel[:, :, int(token_offset * self.flow.token_mel_ratio):]
+            # append mel cache
+            if self.hift_cache_dict[uuid] is not None:
+                hift_cache_mel = self.hift_cache_dict[uuid]['mel']
+                tts_mel = torch.concat([hift_cache_mel, tts_mel], dim=2)
+                self.hift_cache_dict[uuid]['mel'] = tts_mel
             else:
-                # HiFTGenerator: 使用 cache_source 参数
-                # append hift cache
-                if self.hift_cache_dict[uuid] is not None:
-                    hift_cache_mel, hift_cache_source = self.hift_cache_dict[uuid]['mel'], self.hift_cache_dict[uuid]['source']
-                    tts_mel = torch.concat([hift_cache_mel, tts_mel], dim=2)
-                else:
-                    hift_cache_source = torch.zeros(1, 1, 0)
-                # keep overlap mel and hift cache
-                if finalize is False:
-                    tts_speech, tts_source = self.hift.inference(speech_feat=tts_mel, cache_source=hift_cache_source)
-                    if self.hift_cache_dict[uuid] is not None:
-                        tts_speech = fade_in_out(tts_speech, self.hift_cache_dict[uuid]['speech'], self.speech_window)
-                    self.hift_cache_dict[uuid] = {'mel': tts_mel[:, :, -self.mel_cache_len:],
-                                                  'source': tts_source[:, :, -self.source_cache_len:],
-                                                  'speech': tts_speech[:, -self.source_cache_len:]}
-                    tts_speech = tts_speech[:, :-self.source_cache_len]
-                else:
-                    if speed != 1.0:
-                        assert self.hift_cache_dict[uuid] is None, 'speed change only support non-stream inference mode'
-                        tts_mel = F.interpolate(tts_mel, size=int(tts_mel.shape[2] / speed), mode='linear')
-                    tts_speech, tts_source = self.hift.inference(speech_feat=tts_mel, cache_source=hift_cache_source)
-                    if self.hift_cache_dict[uuid] is not None:
-                        tts_speech = fade_in_out(tts_speech, self.hift_cache_dict[uuid]['speech'], self.speech_window)
-            torch.cuda.synchronize(torch.cuda.current_stream())
-            self.stream_pool.put(stream)
-            return tts_speech
+                self.hift_cache_dict[uuid] = {'mel': tts_mel, 'speech_offset': 0}
+            if speed != 1.0:
+                assert token_offset == 0 and finalize is True, 'speed change only support non-stream inference mode'
+                tts_mel = F.interpolate(tts_mel, size=int(tts_mel.shape[2] / speed), mode='linear')
+            tts_speech, _ = self.hift.inference(speech_feat=tts_mel, finalize=finalize)
+            tts_speech = tts_speech[:, self.hift_cache_dict[uuid]['speech_offset']:]
+            self.hift_cache_dict[uuid]['speech_offset'] += tts_speech.shape[1]
+        return tts_speech
 
     async def async_tts(self, text, flow_embedding, llm_embedding=torch.zeros(0, 192),
             prompt_text=torch.zeros(1, 0, dtype=torch.int32),
@@ -449,8 +364,8 @@ class CosyVoice2Model:
                             flow_prompt_speech_token,
                             prompt_speech_feat,
                             flow_embedding,
-                            this_uuid,
                             token_offset,
+                            this_uuid,
                             False
                     )
                     token_offset += peer_chunk_token_num
@@ -482,8 +397,8 @@ class CosyVoice2Model:
                                                          flow_prompt_speech_token,
                                                          prompt_speech_feat,
                                                          flow_embedding,
-                                                         this_uuid,
                                                          token_offset,
+                                                         this_uuid,
                                                          True,
                                                          )
             if this_tts_speech.shape[1] == 0:
@@ -501,8 +416,8 @@ class CosyVoice2Model:
                                                          flow_prompt_speech_token,
                                                          prompt_speech_feat,
                                                          flow_embedding,
-                                                         this_uuid,
                                                          0,
+                                                         this_uuid,
                                                          True,
                                                          speed,
                                                          )
