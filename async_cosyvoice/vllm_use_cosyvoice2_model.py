@@ -75,7 +75,7 @@ class CosyVoice2Model(nn.Module, SupportsLoRA, SupportsPP):
         self.llm_input_size = 896
         self.llm_output_size = 896
 
-        self.speech_token_size = 6561+3
+        self.speech_token_size = 6561+200  # CosyVoice3: 6761, CosyVoice2: 6561+3
         self.llm_token_size = config.vocab_size
 
         # 2. build speech token language model related modules

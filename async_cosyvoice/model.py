@@ -109,11 +109,16 @@ class CosyVoice2Model:
         self.hift_cache_dict = {}
 
         # 与vllm中的模型保持一致
-        self.speech_token_size = 6564
+        self.speech_token_size = 6761  # CosyVoice3: 6561+200=6761, CosyVoice2: 6561+3=6564
         self.llm_token_size = 151936
+        self.text_token_offset = self.speech_token_size  # 文本token起始偏移：CosyVoice3=6761, CosyVoice2=6564
         self.sos_eos_token_id = self.speech_token_size + self.llm_token_size + 1
         self.task_token_id = self.sos_eos_token_id + 1
         self.zero_token_id = self.task_token_id + 1
+
+        # CosyVoice3: stop_token_ids 包含所有200个特殊token [6561, 6562, ..., 6760]
+        self.base_speech_token_size = 6561  # 基础语音token数量
+        self.stop_token_ids = list(range(self.base_speech_token_size, self.speech_token_size))
 
         # vllm 的推理任务需要在一个固定的事件循环中，因此启动一个后台线程专用于推理任务
         self.background_loop = asyncio.new_event_loop()
@@ -152,7 +157,7 @@ class CosyVoice2Model:
 
     async def background_llm_inference(self, out_queue, prompt_token_ids, request_id, stop_token_ids, max_tokens):
         sampling_params = SamplingParams(**SAMPLING_PARAMS)
-        sampling_params.stop_token_ids = stop_token_ids or [6561, 6563]
+        sampling_params.stop_token_ids = stop_token_ids or self.stop_token_ids
         if max_tokens:
             sampling_params.max_tokens = max_tokens
         async for output in self.llm_engine.generate(
@@ -180,7 +185,7 @@ class CosyVoice2Model:
                 await asyncio.sleep(0.005)
 
     async def llm_job(self, text, prompt_text, llm_prompt_speech_token, llm_embedding, uuid):
-        prompt_text = tensor_to_list(prompt_text + torch.tensor(6564))
+        prompt_text = tensor_to_list(prompt_text + torch.tensor(self.text_token_offset))
         llm_prompt_speech_token = tensor_to_list(llm_prompt_speech_token)
 
         start_time = time.time()
@@ -191,7 +196,7 @@ class CosyVoice2Model:
             prompt_token_ids = [self.sos_eos_token_id]
             text_tokens_cache = prompt_text
             async for this_text in text:
-                this_text = tensor_to_list(this_text + torch.tensor(6564))
+                this_text = tensor_to_list(this_text + torch.tensor(self.text_token_offset))
                 # text need tokens
                 text_tokens_cache += this_text
                 while len(llm_prompt_speech_token) != 0:
@@ -205,16 +210,17 @@ class CosyVoice2Model:
                     else:
                         break
                 if len(llm_prompt_speech_token) == 0:
-                    if (len(last_tokens) > 0 and last_tokens[-1] == 6563) or len(prompt_token_ids) == 1:
+                    fill_token_id = self.base_speech_token_size + 3  # 6564 for CosyVoice3
+                    if (len(last_tokens) > 0 and last_tokens[-1] == fill_token_id) or len(prompt_token_ids) == 1:
                         if len(text_tokens_cache) >= self.mix_ratio[0]:
                             text_tokens_temp = text_tokens_cache[:self.mix_ratio[0]]
                             prompt_token_ids += text_tokens_temp
                             text_tokens_cache = text_tokens_cache[self.mix_ratio[0]:]
                         else:
                             continue
-                    async for output in self.llm_inference(prompt_token_ids, request_id=uuid, stop_token_ids=[6563]):
+                    async for output in self.llm_inference(prompt_token_ids, request_id=uuid, stop_token_ids=[fill_token_id]):
                         last_tokens = output.token_ids
-                        if last_tokens[-1] >= 6561:
+                        if last_tokens[-1] >= self.base_speech_token_size:
                             need_add_tokens = last_tokens[:-1]
                         else:
                             need_add_tokens = last_tokens
@@ -222,24 +228,24 @@ class CosyVoice2Model:
                         prompt_token_ids.extend(need_add_tokens)
 
             prompt_token_ids += text_tokens_cache + [self.task_token_id]
-            async for output in self.llm_inference(prompt_token_ids, request_id=uuid, stop_token_ids=[6561, 6563]):
-                if output.token_ids[-1] >= 6561:
+            async for output in self.llm_inference(prompt_token_ids, request_id=uuid, stop_token_ids=self.stop_token_ids):
+                if output.token_ids[-1] >= self.base_speech_token_size:
                     need_add_tokens = last_tokens[:-1]
                 else:
                     need_add_tokens = output.token_ids
                 self.tts_speech_token_dict[uuid].extend(need_add_tokens)
         else:
-            text = tensor_to_list(text + torch.tensor(6564))
+            text = tensor_to_list(text + torch.tensor(self.text_token_offset))
             prompt_token_ids = [self.sos_eos_token_id] + prompt_text + text + \
                                [self.task_token_id] + llm_prompt_speech_token
             max_tokens = len(text) * 20
             async for output in self.llm_inference(
                     prompt_token_ids,
                     request_id=uuid,
-                    stop_token_ids=[6561, 6563],
+                    stop_token_ids=self.stop_token_ids,
                     max_tokens=max_tokens,
             ):
-                if output.token_ids[-1] >= 6561:
+                if output.token_ids[-1] >= self.base_speech_token_size:
                     need_add_tokens = output.token_ids[:-1]
                 else:
                     need_add_tokens = output.token_ids
