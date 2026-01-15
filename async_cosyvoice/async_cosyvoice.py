@@ -32,12 +32,12 @@ class AsyncCosyVoice2:
         self.fp16 = fp16
         if not os.path.exists(model_dir):
             model_dir = snapshot_download(model_dir)
-        with open('{}/cosyvoice2.yaml'.format(model_dir), 'r') as f:
+        with open('{}/cosyvoice3.yaml'.format(model_dir), 'r') as f:
             configs = load_hyperpyyaml(f, overrides={'model_path': model_dir})
         self.frontend = CosyVoiceFrontEnd(configs['get_tokenizer'],
                                           configs['feat_extractor'],
                                           '{}/campplus.onnx'.format(model_dir),
-                                          '{}/speech_tokenizer_v2.onnx'.format(model_dir),
+                                          '{}/speech_tokenizer_v3.onnx'.format(model_dir),
                                           '{}/spk2info.pt'.format(model_dir),
                                           configs['allowed_special'])
         self.sample_rate = configs['sample_rate']

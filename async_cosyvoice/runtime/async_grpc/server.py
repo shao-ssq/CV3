@@ -258,7 +258,7 @@ if __name__ == '__main__':
     parser.add_argument('--port', type=int, default=50000)
     parser.add_argument('--max_conc', type=int, default=10)
     parser.add_argument('--model_dir', type=str,
-                        default='../../../pretrained_models/CosyVoice2-0.5B',
+                        default='../../../pretrained_models/Fun-CosyVoice3-0.5B',
                         help='local path or modelscope repo id')
     parser.add_argument('--load_jit', action='store_true', help='load jit model')
     parser.add_argument('--load_trt', action='store_true', help='load tensorrt model')

@@ -30,7 +30,7 @@ import torch
 from torch import nn
 
 from vllm.attention import AttentionMetadata
-from vllm.config import VllmConfig
+from vllm.config import VllmConfig, T
 from vllm.logger import init_logger
 from vllm.model_executor.layers.logits_processor import LogitsProcessor
 from vllm.model_executor.layers.sampler import SamplerOutput, get_sampler
@@ -38,7 +38,7 @@ from vllm.model_executor.layers.vocab_parallel_embedding import ParallelLMHead
 from vllm.model_executor.sampling_metadata import SamplingMetadata
 from vllm.sequence import IntermediateTensors
 
-from vllm.model_executor.models.interfaces import T, SupportsLoRA, SupportsPP
+from vllm.model_executor.models.interfaces import SupportsLoRA, SupportsPP
 from vllm.model_executor.models.qwen2 import Qwen2Model
 
 from vllm.model_executor.models.utils import AutoWeightsLoader, maybe_prefix, merge_multimodal_embeddings

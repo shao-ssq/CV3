@@ -12,11 +12,31 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import queue
+
 import torch
 import torch.nn.functional as F
 from matcha.models.components.flow_matching import BASECFM
 from cosyvoice.utils.common import set_all_random_seed
 
+
+class EstimatorWrapper:
+    def __init__(self, estimator_engine, estimator_count=2, ):
+        self.estimators = queue.Queue()
+        self.estimator_engine = estimator_engine
+        for _ in range(estimator_count):
+            estimator = estimator_engine.create_execution_context()
+            if estimator is not None:
+                self.estimators.put(estimator)
+
+        if self.estimators.empty():
+            raise Exception("No available estimator")
+
+    def acquire_estimator(self):
+        return self.estimators.get(), self.estimator_engine
+
+    def release_estimator(self, estimator):
+        self.estimators.put(estimator)
 
 class ConditionalCFM(BASECFM):
     def __init__(self, in_channels, cfm_params, n_spks=1, spk_emb_dim=64, estimator: torch.nn.Module = None):
