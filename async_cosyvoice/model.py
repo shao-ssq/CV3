@@ -31,8 +31,6 @@ from cosyvoice.hifigan.generator import HiFTGenerator, CausalHiFTGenerator
 from cosyvoice.utils.common import fade_in_out
 from cosyvoice.utils.file_utils import convert_onnx_to_trt
 
-# 启用vllm V1版本
-os.environ["VLLM_USE_V1"] = '1'
 from vllm import  AsyncLLMEngine
 from vllm.engine.arg_utils import AsyncEngineArgs
 from vllm.sampling_params import SamplingParams
@@ -85,9 +83,7 @@ class CosyVoice2Model:
         self.flow = flow
         self.hift = hift
         self.fp16 = fp16
-        self.flow.fp16 = fp16
-        if self.fp16 is True:
-            self.flow.half()
+
         self.token_hop_len = 25
         # hift cache
         self.mel_cache_len = 8
@@ -202,6 +198,14 @@ class CosyVoice2Model:
         prompt_text = tensor_to_list(prompt_text + torch.tensor(self.llm_token_id_delta))
         llm_prompt_speech_token = tensor_to_list(llm_prompt_speech_token)
 
+        # 检查输入的 prompt_speech_token 范围
+        if llm_prompt_speech_token:
+            min_ps = min(llm_prompt_speech_token)
+            max_ps = max(llm_prompt_speech_token)
+            logging.info(f'[INPUT CHECK] llm_prompt_speech_token: len={len(llm_prompt_speech_token)}, min={min_ps}, max={max_ps}')
+            if max_ps >= self.base_speech_token_size:
+                logging.warning(f'[INPUT CHECK] WARNING: prompt_speech_token contains values >= {self.base_speech_token_size}!')
+
         start_time = time.time()
         if isinstance(text, Union[Generator,AsyncGenerator]):
             if isinstance(text, Generator):
@@ -265,7 +269,7 @@ class CosyVoice2Model:
             text = tensor_to_list(text + torch.tensor(self.llm_token_id_delta))
             prompt_token_ids = [self.sos_eos_token_id] + prompt_text + text + \
                                [self.task_token_id] + llm_prompt_speech_token
-            min_tokens = len(text) * 2
+            min_tokens = len(text) * 3
             max_tokens = len(text) * 20
 
             sampling_params = SamplingParams(
