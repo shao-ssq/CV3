@@ -25,9 +25,9 @@ from contextlib import nullcontext
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 
-from cosyvoice.flow.flow import CausalMaskedDiffWithXvec
+from cosyvoice.flow.flow import CausalMaskedDiffWithXvec, CausalMaskedDiffWithDiT
 from cosyvoice.flow.flow_matching import EstimatorWrapper
-from cosyvoice.hifigan.generator import HiFTGenerator
+from cosyvoice.hifigan.generator import HiFTGenerator, CausalHiFTGenerator
 from cosyvoice.utils.common import fade_in_out
 from cosyvoice.utils.file_utils import convert_onnx_to_trt
 
@@ -60,8 +60,8 @@ class CosyVoice2Model:
 
     def __init__(self,
          model_dir: str,
-         flow: CausalMaskedDiffWithXvec | torch.nn.Module,
-         hift: HiFTGenerator | torch.nn.Module,
+         flow: CausalMaskedDiffWithDiT | torch.nn.Module,
+         hift: CausalHiFTGenerator | torch.nn.Module,
          fp16: bool,
          mix_ratio: List[int] = None,
     ):
@@ -88,12 +88,7 @@ class CosyVoice2Model:
         self.flow.fp16 = fp16
         if self.fp16 is True:
             self.flow.half()
-        self.token_hop_len = 2 * self.flow.input_frame_rate
-        # here we fix flow encoder/decoder decoding_chunk_size, in the future we will send it as arguments, or use cache
-        # CausalMaskedDiffWithXvec has encoder, CausalMaskedDiffWithDiT uses pre_lookahead_layer instead
-        if hasattr(self.flow, 'encoder') and self.flow.encoder is not None:
-            self.flow.encoder.static_chunk_size = 2 * self.flow.input_frame_rate
-        self.flow.decoder.estimator.static_chunk_size = 2 * self.flow.input_frame_rate * self.flow.token_mel_ratio
+        self.token_hop_len = 25
         # hift cache
         self.mel_cache_len = 8
         self.source_cache_len = int(self.mel_cache_len * 480)
