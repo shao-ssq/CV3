@@ -68,6 +68,7 @@ class CosyVoice2Model:
         # vllm engine 的参数配置
         engine_args = AsyncEngineArgs(
             model=model_dir,
+            skip_tokenizer_init=True,
             **ENGINE_ARGS,
         )
         self.llm_engine: AsyncLLMEngine = AsyncLLMEngine.from_engine_args(engine_args)
@@ -116,7 +117,7 @@ class CosyVoice2Model:
         #   - 基础语音 token: 0 ~ 6560 (6561个)
         #   - 特殊 token: 6561 ~ 6760 (200个，包括 sos, eos, task, fill 等)
         # - text tokens: >= 6761 (原始 Qwen2 tokenizer 值 + 6761)
-        speech_token_size = 6561
+        speech_token_size = int(6561)
         self.speech_token_num = speech_token_size + 200  # 6761
         self.base_speech_token_size = speech_token_size  # 6561
 
@@ -130,7 +131,7 @@ class CosyVoice2Model:
         self.fill_token_id = self.base_speech_token_size + 3     # 6564
 
         # stop_token_ids 包含所有200个特殊token (6561~6760)
-        self.stop_token_ids = list(range(self.base_speech_token_size, self.speech_token_num))
+        self.stop_token_ids = [i for i in range(speech_token_size, speech_token_size + 200)]
 
         # vllm 的推理任务需要在一个固定的事件循环中，因此启动一个后台线程专用于推理任务
         self.background_loop = asyncio.new_event_loop()
@@ -203,11 +204,8 @@ class CosyVoice2Model:
             raise
 
     async def llm_job(self, text, prompt_text, llm_prompt_speech_token, llm_embedding, uuid):
-        logging.info(f'llm_job started, uuid: {uuid}')
-        # 参考 model_temp.py: text tokens 加 llm_token_id_delta 偏移，speech tokens 不加偏移
         prompt_text = tensor_to_list(prompt_text + torch.tensor(self.llm_token_id_delta))
         llm_prompt_speech_token = tensor_to_list(llm_prompt_speech_token)
-        logging.info(f'llm_job prompt_text len: {len(prompt_text)}, llm_prompt_speech_token len: {len(llm_prompt_speech_token)}')
 
         start_time = time.time()
         if isinstance(text, Union[Generator,AsyncGenerator]):
@@ -272,36 +270,35 @@ class CosyVoice2Model:
             text = tensor_to_list(text + torch.tensor(self.llm_token_id_delta))
             prompt_token_ids = [self.sos_eos_token_id] + prompt_text + text + \
                                [self.task_token_id] + llm_prompt_speech_token
+            min_tokens = len(text) * 2
             max_tokens = len(text) * 20
 
-            logging.info(f'llm_job non-stream: prompt_len={len(prompt_token_ids)}, max_tokens={max_tokens}')
+            sampling_params = SamplingParams(
+                **SAMPLING_PARAMS,
+                min_tokens=min_tokens,
+                max_tokens=max_tokens,
+                stop_token_ids=self.stop_token_ids,
+            )
 
-            async for output in self.llm_inference(
-                    prompt_token_ids,
+            async for output in self.llm_engine.generate(
+                    {
+                        "prompt_token_ids": prompt_token_ids,
+                    },
+                    sampling_params=sampling_params,
                     request_id=uuid,
-                    stop_token_ids=self.stop_token_ids,
-                    max_tokens=max_tokens,
             ):
-                new_tokens = list(output.token_ids)
-
-                if len(new_tokens) == 0:
-                    continue
-
-                # 检查是否是 stop token (>= base_speech_token_size)
-                if new_tokens[-1] >= self.base_speech_token_size:
-                    need_add_tokens = new_tokens[:-1]
+                output = output.outputs[0]
+                if output.token_ids[-1] in self.stop_token_ids:
+                    need_add_tokens = output.token_ids[:-1]
                 else:
-                    need_add_tokens = new_tokens
-
-                # speech tokens 直接使用，不需要减去偏移
+                    need_add_tokens = output.token_ids
                 self.tts_speech_token_dict[uuid].extend(need_add_tokens)
 
         self.llm_end_dict[uuid] = True
-        tokens = self.tts_speech_token_dict[uuid]
-        logging.info(f'llm job done, generated {len(tokens):>4} tokens, time cost: {time.time() - start_time:.3f}s')
-        if len(tokens) > 0:
-            logging.info(f'speech_tokens range: min={min(tokens)}, max={max(tokens)}, first 10: {tokens[:10]}')
-        logging.debug(f'speech_tokens: len: {len(tokens)}  data: {tokens}')
+        logging.info(
+            f'llm job done, generated {len(self.tts_speech_token_dict[uuid]):>4} tokens, time cost: {time.time() - start_time:.3f}s')
+        logging.debug(
+            f'speech_tokens: len: {len(self.tts_speech_token_dict[uuid])}  data: {self.tts_speech_token_dict[uuid]}')
         # 记录 prompt_token_ids self.tts_speech_token_dict[uuid] 数据用于后续的训练，与flow推理测试
 
     def token2wav(self, token, prompt_token, prompt_feat, embedding, token_offset, uuid, stream=False, finalize=False,

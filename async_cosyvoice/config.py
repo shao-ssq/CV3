@@ -7,7 +7,6 @@ ENGINE_ARGS = {
     "max_num_batched_tokens": 1024,
     "max_model_len": 2048,
     "max_num_seqs": 256,
-    "disable_log_requests": True,
     "disable_log_stats": True,
     "dtype": "float16",
 }
