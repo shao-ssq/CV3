@@ -17,11 +17,9 @@ from vllm.sampling_params import RequestOutputKind
 SAMPLING_PARAMS = {
     "temperature": 1,  # 不能低于0.8, 否则会生成非常多的空音频，或者无法正常生成语音Token
     "top_p": 1,       # 不能低于0.8, 否则会生成非常多的空音频，或者无法正常生成语音Token
-    "top_k": 25,
     # "min_tokens": 80,       # 不支持设置最小的tokens数量设置，开启后vllm直接崩溃，无法启动
     # "presence_penalty": 1.0,    # 不支持设置
     # "frequency_penalty": 0.0,   # 不支持设置
-    "max_tokens": 2048,
     "detokenize": False,          # 目前 vllm 0.7.3 v1版本中设置无效，待后续版本更新后减少计算
     "ignore_eos": False,
     "output_kind": RequestOutputKind.DELTA  # 设置为DELTA，如调整该参数，请同时调整llm_inference的处理代码
