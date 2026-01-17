@@ -27,7 +27,9 @@ class EstimatorWrapper:
         for _ in range(estimator_count):
             estimator = estimator_engine.create_execution_context()
             if estimator is not None:
-                self.estimators.put(estimator)
+                # 为每个 estimator 创建一个专用的 CUDA stream
+                stream = torch.cuda.Stream()
+                self.estimators.put([estimator, stream])
 
         if self.estimators.empty():
             raise Exception("No available estimator")
@@ -35,8 +37,8 @@ class EstimatorWrapper:
     def acquire_estimator(self):
         return self.estimators.get(), self.estimator_engine
 
-    def release_estimator(self, estimator):
-        self.estimators.put(estimator)
+    def release_estimator(self, estimator, stream):
+        self.estimators.put([estimator, stream])
 
 class ConditionalCFM(BASECFM):
     def __init__(self, in_channels, cfm_params, n_spks=1, spk_emb_dim=64, estimator: torch.nn.Module = None):

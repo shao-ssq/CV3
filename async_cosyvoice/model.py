@@ -83,7 +83,15 @@ class CosyVoice2Model:
         self.hift = hift
         self.fp16 = fp16
 
-        self.token_hop_len = 25
+        # 设置 fp16 模式
+        self.flow.fp16 = fp16
+        if self.fp16 is True:
+            self.flow.half()
+
+        self.token_hop_len = 2 * self.flow.input_frame_rate
+        # 设置静态 chunk size，有利于 CUDA JIT 编译优化
+        self.flow.pre_lookahead_layer.static_chunk_size = 2 * self.flow.input_frame_rate
+        self.flow.decoder.estimator.static_chunk_size = 2 * self.flow.input_frame_rate * self.flow.token_mel_ratio
         # hift cache
         self.mel_cache_len = 8
         self.source_cache_len = int(self.mel_cache_len * 480)

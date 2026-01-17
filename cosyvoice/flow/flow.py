@@ -308,6 +308,7 @@ class CausalMaskedDiffWithDiT(torch.nn.Module):
         self.decoder = decoder
         self.only_mask_loss = only_mask_loss
         self.token_mel_ratio = token_mel_ratio
+        self.fp16 = False  # 默认关闭，由外部设置
 
     def forward(
             self,
@@ -366,6 +367,10 @@ class CausalMaskedDiffWithDiT(torch.nn.Module):
                   embedding,
                   streaming,
                   finalize):
+        if self.fp16 is True:
+            prompt_feat = prompt_feat.half()
+            embedding = embedding.half()
+
         assert token.shape[0] == 1
         # xvec projection
         embedding = F.normalize(embedding, dim=1)
