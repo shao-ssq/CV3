@@ -30,7 +30,6 @@ from cosyvoice.flow.flow_matching import EstimatorWrapper
 from cosyvoice.hifigan.generator import HiFTGenerator, CausalHiFTGenerator
 from cosyvoice.utils.common import fade_in_out
 from cosyvoice.utils.file_utils import convert_onnx_to_trt
-
 from vllm import  AsyncLLMEngine
 from vllm.engine.arg_utils import AsyncEngineArgs
 from vllm.sampling_params import SamplingParams
@@ -269,7 +268,7 @@ class CosyVoice2Model:
             text = tensor_to_list(text + torch.tensor(self.llm_token_id_delta))
             prompt_token_ids = [self.sos_eos_token_id] + prompt_text + text + \
                                [self.task_token_id] + llm_prompt_speech_token
-            min_tokens = len(text) * 3
+            min_tokens = len(text) * 2
             max_tokens = len(text) * 20
 
             sampling_params = SamplingParams(
@@ -344,6 +343,7 @@ class CosyVoice2Model:
             self.hift_cache_dict[this_uuid] = None
         # queue: asyncio.Queue[int|None] = asyncio.Queue()
         llm_task = asyncio.create_task(self.llm_job(text, prompt_text, llm_prompt_speech_token, llm_embedding, this_uuid))
+        tts_start_time = time.time()
         if stream is True:
             token_offset = 0
             peer_chunk_token_num = 15     # 设置初始的每个chunk处理语音token的数量
@@ -404,6 +404,8 @@ class CosyVoice2Model:
         else:
             # deal with all tokens
             await llm_task
+            logging.info(f'[PERF] non-stream llm done, wait_time: {(time.time()-tts_start_time)*1000:.1f}ms, tokens: {len(self.tts_speech_token_dict[this_uuid])}')
+            t_before_token2wav = time.time()
             this_tts_speech_token = torch.tensor(self.tts_speech_token_dict[this_uuid]).unsqueeze(dim=0)
             loop = asyncio.get_event_loop()
             this_tts_speech = await loop.run_in_executor(self.thread_executor,
@@ -417,6 +419,7 @@ class CosyVoice2Model:
                                                          True,
                                                          speed,
                                                          )
+            logging.info(f'[PERF] non-stream token2wav done: {(time.time()-t_before_token2wav)*1000:.1f}ms, total: {(time.time()-tts_start_time)*1000:.1f}ms')
             yield {'tts_speech': this_tts_speech.cpu()}
         async with self.lock:
             self.tts_speech_token_dict.pop(this_uuid)

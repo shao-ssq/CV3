@@ -17,6 +17,7 @@ from vllm.sampling_params import RequestOutputKind
 SAMPLING_PARAMS = {
     "temperature": 1,  # 不能低于0.8, 否则会生成非常多的空音频，或者无法正常生成语音Token
     "top_p": 1,       # 不能低于0.8, 否则会生成非常多的空音频，或者无法正常生成语音Token
+    "top_k": 25,      # 与 CosyVoice 保持一致，优化采样质量
     # "min_tokens": 80,       # 不支持设置最小的tokens数量设置，开启后vllm直接崩溃，无法启动
     # "presence_penalty": 1.0,    # 不支持设置
     # "frequency_penalty": 0.0,   # 不支持设置
