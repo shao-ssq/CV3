@@ -211,10 +211,10 @@ if __name__ == "__main__":
     parser.add_argument('--stream', action='store_true', help='是否流式输出')
     parser.add_argument('--speed', type=float, default=1.0, help='Speed up the audio')
     parser.add_argument('--text_frontend', type=bool, default=True, help='Text frontend mode')
-    parser.add_argument('--tts_text', type=str, default='你好，我是通义千问语音合成大模型，请问有什么可以帮您的吗？')
-    parser.add_argument('--spk_id', type=str, default='001')
+    parser.add_argument('--tts_text', type=str, default='运行分布式服务器的基准测试客户端，测试多 GPU 多实例并发性能')
+    parser.add_argument('--spk_id', type=str, default='003')
     parser.add_argument('--prompt_text', type=str, default='希望你以后能够做的比我还好呦。')
-    parser.add_argument('--prompt_wav', type=str, default='../../../asset/zero_shot_prompt.wav')
+    parser.add_argument('--prompt_wav', type=str, default='zero_shot_prompt.wav')
     parser.add_argument('--format', type=str, choices=['', 'pcm'],
                         default='', help='音频输出格式[mp3, wav, pcm]，pcm可用于流式输出，目前测试客户端只支持对【 原始float32格式、Int16位pcm格式】 的音频数据处理，其他格式需自行实现转换')
     parser.add_argument('--instruct_text', type=str, default='使用四川话说')
@@ -222,7 +222,7 @@ if __name__ == "__main__":
     parser.add_argument('--target_sr', type=int, default=24000, help='输出音频的目标采样率 cosyvoice2 为 24000')
     parser.add_argument('--max_conc', type=int, default=4, help='最大并发数')
     parser.add_argument('--input_file', type=str, default='', help='输入需要合成音频文本的文件路径，单行文本为一个语音合成请求，将并发合成音频，并通过--max_conc设置并发数')
-    parser.add_argument('--repeat', type=int, default=10, help='重复执行次数，默认为1次')
+    parser.add_argument('--repeat', type=int, default=20, help='重复执行次数，默认为1次')
     args = parser.parse_args()
 
     if args.mode == 'register_spk':
