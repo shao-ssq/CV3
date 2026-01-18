@@ -180,12 +180,14 @@ class CosyVoice2Model:
         ):
             out_queue.put((output.outputs[0], output.finished))
 
-    async def llm_inference(self, prompt_token_ids: List[int], request_id: str=None, stop_token_ids=None, max_tokens=None):
+    async def llm_inference(self, prompt_token_ids: List[int], request_id: str=None, stop_token_ids=None, max_tokens=None, min_tokens=None):
         logging.info(f'llm_inference started, request_id: {request_id}')
         sampling_params = SamplingParams(**SAMPLING_PARAMS)
         sampling_params.stop_token_ids = stop_token_ids or self.stop_token_ids
         if max_tokens:
             sampling_params.max_tokens = max_tokens
+        if min_tokens:
+            sampling_params.min_tokens = min_tokens
 
         logging.info(f'llm_inference calling generate, prompt_len: {len(prompt_token_ids)}')
         try:
@@ -220,10 +222,12 @@ class CosyVoice2Model:
             last_tokens = []
             prompt_token_ids = [self.sos_eos_token_id]
             text_tokens_cache = prompt_text
+            total_text_tokens = len(prompt_text)  # 跟踪总文本token数
             async for this_text in text:
                 this_text = tensor_to_list(this_text + torch.tensor(self.llm_token_id_delta))
                 # text need tokens
                 text_tokens_cache += this_text
+                total_text_tokens += len(this_text)  # 累计文本token数
                 while len(llm_prompt_speech_token) != 0:
                     if len(text_tokens_cache) >= self.mix_ratio[0]:
                         text_input_token = text_tokens_cache[:self.mix_ratio[0]]
@@ -259,7 +263,14 @@ class CosyVoice2Model:
                         prompt_token_ids.extend(need_add_tokens)
 
             prompt_token_ids += text_tokens_cache + [self.task_token_id]
-            async for output in self.llm_inference(prompt_token_ids, request_id=uuid, stop_token_ids=self.stop_token_ids):
+            # 计算已生成的token数，用于确定还需要生成多少
+            already_generated = len(self.tts_speech_token_dict[uuid])
+            expected_total = total_text_tokens * 2  # 预期总token数
+            remaining_min = max(0, expected_total - already_generated)  # 还需要生成的最小数量
+            async for output in self.llm_inference(prompt_token_ids, request_id=uuid,
+                                                   stop_token_ids=self.stop_token_ids,
+                                                   min_tokens=remaining_min,
+                                                   max_tokens=total_text_tokens * 20):
                 new_tokens = list(output.token_ids)
 
                 if len(new_tokens) == 0:
