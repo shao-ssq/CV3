@@ -26,6 +26,9 @@ import cosyvoice_pb2_grpc
 import logging
 import grpc
 from grpc import aio
+
+# 关闭 grpc 内部的 DEBUG 日志
+logging.getLogger("grpc").setLevel(logging.WARNING)
 import torchaudio
 
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -187,7 +190,6 @@ class CosyVoiceServiceImpl(cosyvoice_pb2_grpc.CosyVoiceServicer):
             processor_args: list
     ) -> AsyncGenerator[cosyvoice_pb2.Response, None]:
         """通用流式处理管道"""
-        logging.debug(f"Processing with {processor.__name__}")
         if request.stream:
             # 每一帧当作一个独立的音频返回
             assert request.format in {"", "pcm"}, (

@@ -15,6 +15,7 @@ import os
 import time
 from typing import Generator, Union, AsyncGenerator
 os.environ["VLLM_USE_V1"] = '1'
+os.environ["VLLM_LOGGING_LEVEL"] = "ERROR"
 
 import torch
 from async_cosyvoice.frontend import CosyVoiceFrontEnd
@@ -137,8 +138,11 @@ class AsyncCosyVoice2:
             logging.info('synthesis text {}'.format(i))
             async for model_output in self.model.async_tts(**model_input, stream=stream, speed=speed):
                 speech_len = model_output['tts_speech'].shape[1] / self.sample_rate
-                logging.info('yield speech index:{}, len {:.2f}, rtf {:.3f},  cost {:.3f}s,  all cost time {:.3f}s'.format(
-                    chunk_index, speech_len,  (time.time()-last_time)/speech_len, time.time()-last_time, time.time()-start_time))
+                if chunk_index == 0:
+                    log_msg = 'yield speech index:{}, len {:.2f}, rtf {:.3f},  cost {:.3f}s,  all cost time {:.3f}s'.format(
+                        chunk_index, speech_len,  (time.time()-last_time)/speech_len, time.time()-last_time, time.time()-start_time)
+                    with open('first_chunk.log', 'a') as f:
+                        f.write(f'{time.strftime("%Y-%m-%d %H:%M:%S")} {log_msg}\n')
                 yield model_output
                 last_time = time.time()
                 chunk_index += 1

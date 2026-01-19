@@ -14,6 +14,7 @@
 import asyncio
 import logging
 import os
+os.environ.setdefault("VLLM_LOGGING_LEVEL", "ERROR")
 import queue
 import threading
 from typing import AsyncGenerator, Generator, List, Union
@@ -196,15 +197,12 @@ class CosyVoice2Model:
             out_queue.put((output.outputs[0], output.finished))
 
     async def llm_inference(self, prompt_token_ids: List[int], request_id: str=None, stop_token_ids=None, max_tokens=None, min_tokens=None):
-        logging.info(f'llm_inference started, request_id: {request_id}')
         sampling_params = SamplingParams(**SAMPLING_PARAMS)
         sampling_params.stop_token_ids = stop_token_ids or self.stop_token_ids
         if max_tokens:
             sampling_params.max_tokens = max_tokens
         if min_tokens:
             sampling_params.min_tokens = min_tokens
-
-        logging.info(f'llm_inference calling generate, prompt_len: {len(prompt_token_ids)}')
         try:
             async for output in self.llm_engine.generate(
                     {
@@ -226,7 +224,6 @@ class CosyVoice2Model:
         if llm_prompt_speech_token:
             min_ps = min(llm_prompt_speech_token)
             max_ps = max(llm_prompt_speech_token)
-            logging.info(f'[INPUT CHECK] llm_prompt_speech_token: len={len(llm_prompt_speech_token)}, min={min_ps}, max={max_ps}')
             if max_ps >= self.base_speech_token_size:
                 logging.warning(f'[INPUT CHECK] WARNING: prompt_speech_token contains values >= {self.base_speech_token_size}!')
 
@@ -327,8 +324,6 @@ class CosyVoice2Model:
                 self.tts_speech_token_dict[uuid].extend(need_add_tokens)
 
         self.llm_end_dict[uuid] = True
-        logging.info(
-            f'llm job done, generated {len(self.tts_speech_token_dict[uuid]):>4} tokens, time cost: {time.time() - start_time:.3f}s')
         logging.debug(
             f'speech_tokens: len: {len(self.tts_speech_token_dict[uuid])}  data: {self.tts_speech_token_dict[uuid]}')
         # 记录 prompt_token_ids self.tts_speech_token_dict[uuid] 数据用于后续的训练，与flow推理测试
@@ -443,7 +438,6 @@ class CosyVoice2Model:
                             peer_chunk_token_num = (pending_num // 15 + 1) * 15
                     elif multiples > 2:
                         peer_chunk_token_num = (pending_num // 15) * 15
-                    logging.debug(f'the multiples: {multiples:.2f}, next chunk_token_num: {peer_chunk_token_num}')
                 else:
                     if self.llm_end_dict[this_uuid] is True:
                         break
