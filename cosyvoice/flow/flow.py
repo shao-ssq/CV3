@@ -400,7 +400,7 @@ class CausalMaskedDiffWithDiT(torch.nn.Module):
             mask=mask.unsqueeze(1),
             spks=embedding,
             cond=conds,
-            n_timesteps=10,
+            n_timesteps=4,
             streaming=streaming
         )
         feat = feat[:, :, mel_len1:]
