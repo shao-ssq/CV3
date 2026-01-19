@@ -168,10 +168,17 @@ class CosyVoice2Model:
         flow_encoder = torch.jit.load(flow_encoder_model, map_location=self.device)
         self.flow.encoder = flow_encoder
 
+    def get_trt_kwargs(self):
+        min_shape = [(2, 80, 4), (2, 1, 4), (2, 80, 4), (2, 80, 4)]
+        opt_shape = [(2, 80, 500), (2, 1, 500), (2, 80, 500), (2, 80, 500)]
+        max_shape = [(2, 80, 3000), (2, 1, 3000), (2, 80, 3000), (2, 80, 3000)]
+        input_names = ["x", "mask", "mu", "cond"]
+        return {'min_shape': min_shape, 'opt_shape': opt_shape, 'max_shape': max_shape, 'input_names': input_names}
+
     def load_trt(self, flow_decoder_estimator_model, flow_decoder_onnx_model, fp16):
         assert torch.cuda.is_available(), 'tensorrt only supports gpu!'
         if not os.path.exists(flow_decoder_estimator_model):
-            convert_onnx_to_trt(flow_decoder_estimator_model, flow_decoder_onnx_model, fp16)
+            convert_onnx_to_trt(flow_decoder_estimator_model, self.get_trt_kwargs(), flow_decoder_onnx_model, fp16)
         if os.path.getsize(flow_decoder_estimator_model) == 0:
             raise ValueError('{} is empty file, delete it and export again!'.format(flow_decoder_estimator_model))
         del self.flow.decoder.estimator
