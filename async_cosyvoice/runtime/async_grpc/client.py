@@ -231,20 +231,35 @@ if __name__ == "__main__":
         if args.input_file:
             multiprocess_main(args)
         else:
-            # 重复执行指定次数
-            for i in range(args.repeat):
-                logging.info(f'========== 开始第 {i+1}/{args.repeat} 次执行 ==========')
-                # 如果指定了重复次数，自动给输出文件添加序号
-                if args.repeat > 1:
-                    base_path = args.output_path
-                    # 分离文件名和扩展名
-                    if '.' in base_path:
-                        name_part = base_path.rsplit('_', 1)[0]
-                        ext_part = base_path.rsplit('.', 1)[1]
-                        args.output_path = f"{name_part}_{i+1}.{ext_part}"
-                    else:
-                        args.output_path = f"{base_path}_{i+1}"
+            # 重复执行指定次数，支持并发
+            if args.repeat > 1:
+                start_time = time.monotonic()
+                base_path = args.output_path
 
+                # 构建所有请求
+                requests = []
+                for i in range(args.repeat):
+                    clone_args = Namespace(**args.__dict__)
+                    # 分离文件名和扩展名，添加序号
+                    if '.' in base_path:
+                        name_part, ext_part = base_path.rsplit('.', 1)
+                        clone_args.output_path = f"{name_part}_{i+1}.{ext_part}"
+                    else:
+                        clone_args.output_path = f"{base_path}_{i+1}"
+                    requests.append(clone_args)
+
+                # 并发执行
+                with ProcessPoolExecutor(max_workers=args.max_conc) as executor:
+                    futures = [executor.submit(run_async_main, req) for req in requests]
+                    for i, future in enumerate(as_completed(futures)):
+                        try:
+                            future.result()
+                            logging.info(f'完成第 {i+1}/{args.repeat} 次执行')
+                        except Exception as e:
+                            logging.error(f'第 {i+1} 次执行失败: {e}')
+
+                logging.info(f"Total time for {args.repeat} requests with concurrency {args.max_conc}: {time.monotonic() - start_time:.2f}s")
+            else:
                 asyncio.run(main(args))
 
     # python client.py --mode zero_shot_by_spk_id --spk_id 001 --stream_input --tts_text 你好，请问有什么可以帮您的吗？ --stream

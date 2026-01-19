@@ -51,6 +51,25 @@ REGISTER_SPK_INFO_DICT = {
     }
 }
 
+# ============ 分布式部署配置 ============
+# 是否启用分布式模式（LLM 和 Token2Wav 分离部署）
+DISTRIBUTED_MODE = False
+
+# Token2Wav 服务列表
+TOKEN2WAV_SERVICES = [
+    {"host": "localhost", "port": 50001},
+    # {"host": "localhost", "port": 50002},
+    # {"host": "192.168.1.100", "port": 50001},
+]
+
+# 负载均衡策略: round_robin | session_sticky
+# 流式推理必须使用 session_sticky
+LOAD_BALANCE_STRATEGY = "session_sticky"
+
+# Token2Wav 服务超时 (毫秒)
+TOKEN2WAV_TIMEOUT_MS = 30000
+
+# ============ 私有配置覆盖 ============
 # 编写一个代码检查是否有 private_config.py 文件，如果有则读取该文件，并【完全】覆盖ENGINE_ARGS 和 SAMPLING_PARAMS 的值
 try:
     from async_cosyvoice.private_config import *

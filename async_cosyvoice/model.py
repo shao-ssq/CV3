@@ -35,7 +35,10 @@ from vllm.engine.arg_utils import AsyncEngineArgs
 from vllm.sampling_params import SamplingParams
 
 from vllm import ModelRegistry
-from async_cosyvoice.config import ENGINE_ARGS, SAMPLING_PARAMS, ESTIMATOR_COUNT
+from async_cosyvoice.config import (
+    ENGINE_ARGS, SAMPLING_PARAMS, ESTIMATOR_COUNT,
+    DISTRIBUTED_MODE, TOKEN2WAV_SERVICES, LOAD_BALANCE_STRATEGY, TOKEN2WAV_TIMEOUT_MS
+)
 
 from async_cosyvoice.vllm_use_cosyvoice2_model import CosyVoice2Model as CosyVoice2LLM
 ModelRegistry.register_model("CosyVoice2Model", CosyVoice2LLM)
@@ -135,6 +138,18 @@ class CosyVoice2Model:
         self.background_loop = asyncio.new_event_loop()
         self.loop_thread = threading.Thread(target=self._run_event_loop, daemon=True)
         self.loop_thread.start()
+
+        # 分布式模式：初始化远程 Token2Wav 客户端
+        self.distributed_mode = DISTRIBUTED_MODE
+        self.token2wav_client = None
+        if self.distributed_mode and TOKEN2WAV_SERVICES:
+            from async_cosyvoice.runtime.async_grpc.token2wav_client import Token2WavClient
+            self.token2wav_client = Token2WavClient(
+                services=TOKEN2WAV_SERVICES,
+                strategy=LOAD_BALANCE_STRATEGY,
+                timeout_ms=TOKEN2WAV_TIMEOUT_MS
+            )
+            logging.info(f'Distributed mode enabled, {len(TOKEN2WAV_SERVICES)} Token2Wav services configured')
 
     def _run_event_loop(self):
         asyncio.set_event_loop(self.background_loop)
@@ -349,6 +364,38 @@ class CosyVoice2Model:
             self.hift_cache_dict[uuid]['speech_offset'] += tts_speech.shape[1]
         return tts_speech
 
+    async def _remote_token2wav(self, token, prompt_token, prompt_feat, embedding, token_offset, uuid,
+                                 stream=False, finalize=False, speed=1.0):
+        """调用远程 Token2Wav 服务"""
+        return await self.token2wav_client.token2wav(
+            token=token,
+            prompt_token=prompt_token,
+            prompt_feat=prompt_feat,
+            embedding=embedding,
+            token_offset=token_offset,
+            session_id=uuid,
+            stream=stream,
+            finalize=finalize,
+            speed=speed
+        )
+
+    async def _dispatch_token2wav(self, token, prompt_token, prompt_feat, embedding, token_offset, uuid,
+                                   stream=False, finalize=False, speed=1.0):
+        """根据模式分发 token2wav 调用"""
+        if self.distributed_mode and self.token2wav_client:
+            return await self._remote_token2wav(
+                token, prompt_token, prompt_feat, embedding,
+                token_offset, uuid, stream, finalize, speed
+            )
+        else:
+            loop = asyncio.get_event_loop()
+            return await loop.run_in_executor(
+                self.thread_executor,
+                self.token2wav,
+                token, prompt_token, prompt_feat, embedding,
+                token_offset, uuid, stream, finalize, speed
+            )
+
     async def async_tts(self, text, flow_embedding, llm_embedding=torch.zeros(0, 192),
             prompt_text=torch.zeros(1, 0, dtype=torch.int32),
             llm_prompt_speech_token=torch.zeros(1, 0, dtype=torch.int32),
@@ -373,15 +420,14 @@ class CosyVoice2Model:
             while True:
                 if (pending_num:= len(self.tts_speech_token_dict[this_uuid]) - token_offset) >= (peer_chunk_token_num + self.flow.pre_lookahead_len):
                     this_tts_speech_token = torch.tensor(self.tts_speech_token_dict[this_uuid][:token_offset + peer_chunk_token_num + self.flow.pre_lookahead_len]).unsqueeze(dim=0)
-                    this_tts_speech = await loop.run_in_executor(self.thread_executor,
-                        self.token2wav,
+                    this_tts_speech = await self._dispatch_token2wav(
                         this_tts_speech_token,
-                            flow_prompt_speech_token,
-                            prompt_speech_feat,
-                            flow_embedding,
-                            token_offset,
-                            this_uuid,
-                            False
+                        flow_prompt_speech_token,
+                        prompt_speech_feat,
+                        flow_embedding,
+                        token_offset,
+                        this_uuid,
+                        True  # stream=True for streaming inference
                     )
                     token_offset += peer_chunk_token_num
                     yield {'tts_speech': this_tts_speech.cpu()}
@@ -406,16 +452,16 @@ class CosyVoice2Model:
             await llm_task
             # deal with remain tokens, make sure inference remain token len equals token_hop_len when cache_speech is not None
             this_tts_speech_token = torch.tensor(self.tts_speech_token_dict[this_uuid]).unsqueeze(dim=0)
-            this_tts_speech = await loop.run_in_executor(self.thread_executor,
-                                                         self.token2wav,
-                                                         this_tts_speech_token,
-                                                         flow_prompt_speech_token,
-                                                         prompt_speech_feat,
-                                                         flow_embedding,
-                                                         token_offset,
-                                                         this_uuid,
-                                                         True,
-                                                         )
+            this_tts_speech = await self._dispatch_token2wav(
+                this_tts_speech_token,
+                flow_prompt_speech_token,
+                prompt_speech_feat,
+                flow_embedding,
+                token_offset,
+                this_uuid,
+                True,  # stream=True for streaming inference
+                True   # finalize=True
+            )
             if this_tts_speech.shape[1] == 0:
                 logging.debug(f'no tts_speech_token shape: {this_tts_speech.shape}, data: {this_tts_speech}')
                 return
@@ -426,18 +472,17 @@ class CosyVoice2Model:
             logging.info(f'[PERF] non-stream llm done, wait_time: {(time.time()-tts_start_time)*1000:.1f}ms, tokens: {len(self.tts_speech_token_dict[this_uuid])}')
             t_before_token2wav = time.time()
             this_tts_speech_token = torch.tensor(self.tts_speech_token_dict[this_uuid]).unsqueeze(dim=0)
-            loop = asyncio.get_event_loop()
-            this_tts_speech = await loop.run_in_executor(self.thread_executor,
-                                                         self.token2wav,
-                                                         this_tts_speech_token,
-                                                         flow_prompt_speech_token,
-                                                         prompt_speech_feat,
-                                                         flow_embedding,
-                                                         0,
-                                                         this_uuid,
-                                                         True,
-                                                         speed,
-                                                         )
+            this_tts_speech = await self._dispatch_token2wav(
+                this_tts_speech_token,
+                flow_prompt_speech_token,
+                prompt_speech_feat,
+                flow_embedding,
+                0,
+                this_uuid,
+                False,
+                True,  # finalize=True
+                speed
+            )
             logging.info(f'[PERF] non-stream token2wav done: {(time.time()-t_before_token2wav)*1000:.1f}ms, total: {(time.time()-tts_start_time)*1000:.1f}ms')
             yield {'tts_speech': this_tts_speech.cpu()}
         async with self.lock:

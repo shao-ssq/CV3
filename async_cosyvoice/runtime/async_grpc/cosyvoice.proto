@@ -75,3 +75,36 @@ message RegisterSpkResponse {
   Status status = 1;
   string registered_spk_id = 2;
 }
+
+// ============ Token2Wav 分布式服务 ============
+
+service Token2WavService {
+  rpc Convert(Token2WavRequest) returns (Token2WavResponse) {}
+  rpc StreamConvert(stream Token2WavRequest) returns (stream Token2WavResponse) {}
+}
+
+message TensorMeta {
+  repeated int64 shape = 1;
+  string dtype = 2;  // float32, float16, int32
+}
+
+message Token2WavRequest {
+  string session_id = 1;
+  repeated int32 speech_tokens = 2;
+  bytes prompt_token = 3;
+  TensorMeta prompt_token_meta = 4;
+  bytes prompt_feat = 5;
+  TensorMeta prompt_feat_meta = 6;
+  bytes embedding = 7;
+  TensorMeta embedding_meta = 8;
+  int32 token_offset = 9;
+  bool stream = 10;
+  bool finalize = 11;
+  float speed = 12;
+}
+
+message Token2WavResponse {
+  bytes audio_data = 1;
+  string format = 2;
+  int32 sample_rate = 3;
+}
