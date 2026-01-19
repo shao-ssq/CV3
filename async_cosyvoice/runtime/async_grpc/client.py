@@ -2,6 +2,7 @@ import os
 import sys
 import asyncio
 import time
+import re
 import numpy as np
 import soundfile as sf
 import librosa
@@ -161,13 +162,46 @@ async def main(args):
 def run_async_main(args):
     asyncio.run(main(args))
 
+def calculate_and_write_stats(start_line, concurrency):
+    """读取 first_chunk.log 中从 start_line 开始的日志，计算统计数据并绘制表格"""
+    costs = []
+    try:
+        with open('first_chunk.log', 'r') as f:
+            lines = f.readlines()[start_line:]
+            for line in lines:
+                match = re.search(r'cost\s+([\d.]+)s', line)
+                if match:
+                    costs.append(float(match.group(1)))
+
+        if costs:
+            costs.sort()
+            n = len(costs)
+            p50 = costs[int(n * 0.5)]
+            p95 = costs[int(n * 0.95)] if n >= 20 else costs[-1]
+            min_cost = costs[0]
+            max_cost = costs[-1]
+            avg_cost = sum(costs) / n
+
+            # 绘制表格
+            table = f'''
++------------+------------+------------+------------+------------+------------+
+| 并发数     | 请求数     | P50(s)     | P95(s)     | 最小(s)    | 最大(s)    |
++------------+------------+------------+------------+------------+------------+
+| {concurrency:<10} | {n:<10} | {p50:<10.3f} | {p95:<10.3f} | {min_cost:<10.3f} | {max_cost:<10.3f} |
++------------+------------+------------+------------+------------+------------+
+'''
+            with open('first_chunk.log', 'a') as f:
+                f.write(table)
+    except Exception as e:
+        logging.error(f'计算统计数据失败: {e}')
+
 from argparse import Namespace
 
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
-def multiprocess_main(args):
+def multiprocess_main(args, start_line):
     max_conc = args.max_conc
-    
+
     all_text = []
     with open(args.input_file, 'r') as f:
         for line in f:
@@ -183,11 +217,15 @@ def multiprocess_main(args):
             clone_args.tts_text = text
             clone_args.output_path = f"{args.output_path}/{i}.wav"
             requests.append(clone_args)
-            
-        futures = [executor.submit(run_async_main, request) for request in requests]
+
+        futures = []
+        for request in requests:
+            futures.append(executor.submit(run_async_main, request))
+            time.sleep(0.01)  # 10ms 启动间隔
         for future in as_completed(futures):
             future.result()
     logging.info(f"Total time: {time.monotonic() - start_time:.2f}s")
+    calculate_and_write_stats(start_line, max_conc)
 
 async def register_spk(args):
     async with aio.insecure_channel(f"{args.host}:{args.port}") as channel:
@@ -220,16 +258,26 @@ if __name__ == "__main__":
     parser.add_argument('--instruct_text', type=str, default='使用四川话说')
     parser.add_argument('--output_path', type=str, default='/home/shao/桌面/demo.wav', help='输出音频的文件名')
     parser.add_argument('--target_sr', type=int, default=24000, help='输出音频的目标采样率 cosyvoice2 为 24000')
-    parser.add_argument('--max_conc', type=int, default=4, help='最大并发数')
+    parser.add_argument('--max_conc', type=int, default=5, help='最大并发数')
     parser.add_argument('--input_file', type=str, default='', help='输入需要合成音频文本的文件路径，单行文本为一个语音合成请求，将并发合成音频，并通过--max_conc设置并发数')
     parser.add_argument('--repeat', type=int, default=20, help='重复执行次数，默认为1次')
     args = parser.parse_args()
+
+    # 记录当前日志行数，写入分隔线
+    try:
+        with open('first_chunk.log', 'r') as f:
+            start_line = len(f.readlines())
+    except FileNotFoundError:
+        start_line = 0
+    with open('first_chunk.log', 'a') as f:
+        f.write(f'{"-"*20} concurrency: {args.max_conc} {"-"*20}\n')
+    start_line += 1  # 跳过分隔线
 
     if args.mode == 'register_spk':
         asyncio.run(register_spk(args))
     else:
         if args.input_file:
-            multiprocess_main(args)
+            multiprocess_main(args, start_line)
         else:
             # 重复执行指定次数，支持并发
             if args.repeat > 1:
@@ -250,7 +298,10 @@ if __name__ == "__main__":
 
                 # 并发执行
                 with ProcessPoolExecutor(max_workers=args.max_conc) as executor:
-                    futures = [executor.submit(run_async_main, req) for req in requests]
+                    futures = []
+                    for req in requests:
+                        futures.append(executor.submit(run_async_main, req))
+                        time.sleep(0.01)  # 10ms 启动间隔
                     for i, future in enumerate(as_completed(futures)):
                         try:
                             future.result()
@@ -259,8 +310,7 @@ if __name__ == "__main__":
                             logging.error(f'第 {i+1} 次执行失败: {e}')
 
                 logging.info(f"Total time for {args.repeat} requests with concurrency {args.max_conc}: {time.monotonic() - start_time:.2f}s")
+                calculate_and_write_stats(start_line, args.max_conc)
             else:
                 asyncio.run(main(args))
-
-    # python client.py --mode zero_shot_by_spk_id --spk_id 001 --stream_input --tts_text 你好，请问有什么可以帮您的吗？ --stream
-    # python client.py --mode zero_shot_by_spk_id --spk_id 001 --input_file text.txt --max_conc 10 --output_path output
+# --stream --stream_input
