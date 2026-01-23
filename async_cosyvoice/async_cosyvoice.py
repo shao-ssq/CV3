@@ -50,6 +50,21 @@ class AsyncCosyVoice3:
                                 self.fp16)
         del configs
 
+    def shutdown(self):
+        """清理资源"""
+        try:
+            if hasattr(self, 'model') and self.model is not None:
+                self.model.shutdown()
+        except Exception as e:
+            logging.error(f'Error during AsyncCosyVoice3 shutdown: {e}')
+
+    def __del__(self):
+        """析构函数"""
+        try:
+            self.shutdown()
+        except:
+            pass  # 忽略析构函数中的异常
+
     def list_available_spks(self):
         spks = list(self.frontend.spk2info.keys())
         return spks

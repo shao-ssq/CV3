@@ -143,6 +143,54 @@ class CosyVoice3Model:
         asyncio.set_event_loop(self.background_loop)
         self.background_loop.run_forever()
 
+    def shutdown(self):
+        """清理资源，正确关闭 vllm 引擎和后台线程"""
+        try:
+            # 1. 先关闭 vllm 引擎（在后台线程的事件循环中）
+            if hasattr(self, 'llm_engine') and self.llm_engine is not None:
+                try:
+                    # 使用 asyncio.run_coroutine_threadsafe 在后台线程中关闭引擎
+                    future = asyncio.run_coroutine_threadsafe(
+                        self.llm_engine.shutdown(),
+                        self.background_loop
+                    )
+                    # 等待引擎关闭，最多等待 10 秒
+                    future.result(timeout=10)
+                    logging.info('vLLM engine shutdown completed')
+                except Exception as e:
+                    logging.warning(f'Error shutting down vLLM engine: {e}')
+
+            # 2. 停止后台事件循环
+            if hasattr(self, 'background_loop') and self.background_loop and self.background_loop.is_running():
+                self.background_loop.call_soon_threadsafe(self.background_loop.stop)
+
+            # 3. 等待后台线程结束
+            if hasattr(self, 'loop_thread') and self.loop_thread and self.loop_thread.is_alive():
+                self.loop_thread.join(timeout=5)
+
+            # 4. 关闭线程池
+            if hasattr(self, 'thread_executor'):
+                self.thread_executor.shutdown(wait=True)
+
+            # 5. 清理 torch 分布式进程组（如果存在）
+            try:
+                if torch.distributed.is_initialized():
+                    torch.distributed.destroy_process_group()
+                    logging.info('Destroyed PyTorch distributed process group')
+            except Exception as e:
+                logging.debug(f'Process group cleanup (expected if not using distributed): {e}')
+
+            logging.info('CosyVoice3Model shutdown completed')
+        except Exception as e:
+            logging.error(f'Error during shutdown: {e}', exc_info=True)
+
+    def __del__(self):
+        """析构函数，确保资源被清理"""
+        try:
+            self.shutdown()
+        except:
+            pass  # 忽略析构函数中的异常
+
     def load(self, flow_model, hift_model):
         self.flow.load_state_dict(torch.load(flow_model, weights_only=True, map_location=self.device), strict=True)
         self.flow.to(self.device).eval()
