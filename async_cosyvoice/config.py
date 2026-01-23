@@ -69,12 +69,33 @@ LOAD_BALANCE_STRATEGY = "session_sticky"
 # Token2Wav 服务超时 (毫秒)
 TOKEN2WAV_TIMEOUT_MS = 30000
 
-# ============ 私有配置覆盖 ============
-# 编写一个代码检查是否有 private_config.py 文件，如果有则读取该文件，并【完全】覆盖ENGINE_ARGS 和 SAMPLING_PARAMS 的值
-try:
-    from async_cosyvoice.private_config import *
-    import logging
+# ============ WebSocket 和 HTTP 服务配置 ============
+import logging
+import os
 
-    logging.info("Loaded private_config.py")
-except ImportError:
-    pass
+# 日志配置
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+# TRT并发数
+trt_concurrent = 4
+
+# 录音上传目录
+record_upload_dir = os.path.join(os.getcwd(), "uploads", "records")
+os.makedirs(record_upload_dir, exist_ok=True)
+
+# 录音哈希分桶数量
+record_hash_count = 100
+
+# 句子音频保存目录
+sentence_audio_dir = os.path.join(os.getcwd(), "outputs", "sentences")
+os.makedirs(sentence_audio_dir, exist_ok=True)
+
+# 是否保存句子音频
+save_sentence_audio = False
+
+# 是否缓存句子
+cache_sentence = True

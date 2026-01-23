@@ -13,7 +13,7 @@ from modelscope import snapshot_download
 from tqdm import tqdm
 
 
-class AsyncCosyVoice2:
+class AsyncCosyVoice3:
     def __init__(self, model_dir, load_jit=False, load_trt=False, fp16=False):
         self.instruct = True if '-Instruct' in model_dir else False
         self.model_dir = model_dir

@@ -29,7 +29,7 @@ from async_cosyvoice.config import (
 )
 
 from async_cosyvoice.vllm_use_cosyvoice2_model import CosyVoice3Model as CosyVoice3LLM
-ModelRegistry.register_model("CosyVoice2Model", CosyVoice3LLM)
+ModelRegistry.register_model("CosyVoice3Model", CosyVoice3LLM)
 
 class AsyncWrapper:
     """将一个同步生成器包装为异步生成器"""
