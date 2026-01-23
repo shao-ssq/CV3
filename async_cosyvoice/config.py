@@ -85,7 +85,11 @@ sentence_audio_dir = os.path.join(os.getcwd(), "outputs", "sentences")
 os.makedirs(sentence_audio_dir, exist_ok=True)
 
 # 是否保存句子音频
-save_sentence_audio = False
+save_sentence_audio = True
 
 # 是否缓存句子
 cache_sentence = True
+
+auth_info = {
+    "18390413": "qxmYaDtPRB"
+}
