@@ -41,16 +41,6 @@ OVERWRITE_NORMALIZER_CACHE = True
 # 根据GPU显存大小量及性能设置合适的 ESTIMATOR_COUNT
 ESTIMATOR_COUNT = 4
 
-# 注册音色信息，用于frontend中生成音色信息, 请根据自己的实际情况进行使用
-# key 为 spk_id, value 为参考音频对应的文本、音频路径， 必填
-# 可以一次性注册多个音色信息，之前注册的音色信息，后续可以再次注册，将覆盖之前的音色信息
-REGISTER_SPK_INFO_DICT = {
-    "new_spk_id": {
-        "prompt_text": "这是参考音频对应的文本",
-        "prompt_audio_path": "/home/none/test.wav",  # 请尽量是16000Hz的音频，并以绝对路径提供
-    }
-}
-
 # ============ 分布式部署配置 ============
 # 是否启用分布式模式（LLM 和 Token2Wav 分离部署）
 DISTRIBUTED_MODE = False

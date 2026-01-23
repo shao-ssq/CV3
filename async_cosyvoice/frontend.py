@@ -219,25 +219,6 @@ class CosyVoiceFrontEnd:
             self.en_tn_model = EnNormalizer()
             self.inflect_parser = inflect.engine()
 
-        if REGISTER_SPK_INFO_DICT:
-            for spk_id, info in REGISTER_SPK_INFO_DICT.items():
-                try:
-                    prompt_text = info['prompt_text']
-                    prompt_audio_path = info['prompt_audio_path']
-                    if not os.path.exists(prompt_audio_path):
-                        logging.error(f"doesn't exist prompt_audio_path: {prompt_audio_path}")
-                        continue
-                    logging.info(f"Generate spk_info for {spk_id}....")
-                    prompt_audio, sr = torchaudio.load(prompt_audio_path)
-                    prompt_audio = prompt_audio
-                    if sr != 16000:
-                        prompt_audio = torchaudio.transforms.Resample(orig_freq=sr, new_freq=16000)(prompt_audio)
-                    self.generate_spk_info(spk_id, prompt_text, prompt_audio, self.feat_extractor.sampling_rate)  # noqa
-                    logging.info(f"Generate spk_info for {spk_id} success!")
-                except Exception as e:
-                    logging.error(f"Generate spk_info for {spk_id} failed!")
-                    logging.error(e)
-
     def _extract_text_token(self, text):
         if isinstance(text, Generator):
             logging.info('get tts_text generator, will return _extract_text_token_generator!')
