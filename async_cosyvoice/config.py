@@ -43,7 +43,7 @@ ESTIMATOR_COUNT = 4
 
 # ============ 分布式部署配置 ============
 # 是否启用分布式模式（LLM 和 Token2Wav 分离部署）
-DISTRIBUTED_MODE = True
+DISTRIBUTED_MODE = False
 
 # Token2Wav 服务列表
 TOKEN2WAV_SERVICES = [
