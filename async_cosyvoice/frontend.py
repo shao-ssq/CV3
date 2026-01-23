@@ -29,7 +29,6 @@ import torchaudio.compliance.kaldi as kaldi
 from pydantic import BaseModel, ConfigDict
 
 from async_cosyvoice.config import OVERWRITE_NORMALIZER_CACHE
-from async_cosyvoice.config import REGISTER_SPK_INFO_DICT
 
 try:
     import ttsfrd
