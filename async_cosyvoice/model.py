@@ -1,16 +1,3 @@
-# Copyright (c) 2024 Alibaba Inc (authors: Xiang Lyu)
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#   http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
 import asyncio
 import logging
 import os
@@ -41,8 +28,8 @@ from async_cosyvoice.config import (
     DISTRIBUTED_MODE, TOKEN2WAV_SERVICES, LOAD_BALANCE_STRATEGY, TOKEN2WAV_TIMEOUT_MS
 )
 
-from async_cosyvoice.vllm_use_cosyvoice2_model import CosyVoice2Model as CosyVoice2LLM
-ModelRegistry.register_model("CosyVoice2Model", CosyVoice2LLM)
+from async_cosyvoice.vllm_use_cosyvoice2_model import CosyVoice3Model as CosyVoice3LLM
+ModelRegistry.register_model("CosyVoice2Model", CosyVoice3LLM)
 
 class AsyncWrapper:
     """将一个同步生成器包装为异步生成器"""
@@ -57,7 +44,7 @@ def tensor_to_list(tensor: torch.tensor):
     return tensor.view(-1).cpu().numpy().tolist()
 
 
-class CosyVoice2Model:
+class CosyVoice3Model:
 
     def __init__(self,
          model_dir: str,

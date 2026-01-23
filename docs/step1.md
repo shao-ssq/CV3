@@ -1,35 +1,3 @@
-### 权重文件对比
-
-| 项目 | 权重文件 | 内容 | vllm 是否加载 |
-|------|---------|------|--------------|
-| CosyVoice2 | llm.pt | Qwen2 + speech_embedding + llm_decoder | ✅ 全部加载 |
-| CosyVoice3 | model.safetensors | 只有 Qwen2 | ✅ 加载 |
-| CosyVoice3 | llm.pt | speech_embedding + llm_decoder | ❌ **未加载** |
-
-### vllm 权重加载流程
-
-```python
-# vllm_use_cosyvoice2_model.py 的 load_weights 函数
-def load_weights(self, weights):
-    weights = self.convert_weights(weights)  # 转换权重名称
-    loader = AutoWeightsLoader(self)
-    loader.load_weights(weights)  # 只从 safetensors 加载
-```
-
-**问题**: `AutoWeightsLoader` 只加载 `model.safetensors`，不会加载 `llm.pt`！
-
-### 结果
-
-- `speech_embedding`: 随机初始化 (未加载训练权重)
-- `llm_decoder`: 随机初始化 (未加载训练权重)
-- 模型无法正确处理 speech tokens → 生成垃圾输出
-
----
-
-## 七、修复方案: 合并权重文件
-
-将 `llm.pt` 中的关键权重合并到 `model.safetensors`:
-
 ```bash
 python3 << 'EOF'
 import torch

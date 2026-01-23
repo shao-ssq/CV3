@@ -1,6 +1,6 @@
 {
   "architectures": [
-    "CosyVoice2Model"
+    "CosyVoice3Model"
   ],
   "attention_dropout": 0.0,
   "bos_token_id": 151643,

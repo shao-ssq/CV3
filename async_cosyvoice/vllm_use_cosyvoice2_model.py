@@ -43,7 +43,7 @@ from vllm.model_executor.models.utils import AutoWeightsLoader, maybe_prefix
 logger = init_logger(__name__)
 
 
-class CosyVoice2Model(nn.Module, SupportsLoRA, SupportsPP):
+class CosyVoice3Model(nn.Module, SupportsLoRA, SupportsPP):
 
     packed_modules_mapping = {
         "qkv_proj": [
