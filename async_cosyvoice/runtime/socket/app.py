@@ -18,7 +18,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, JSONResponse
 from starlette.types import ASGIApp, Scope, Receive, Send
 
-from async_cosyvoice.config import logger
+from async_cosyvoice.config import logger, record_upload_dir, record_hash_count
 
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.append('{}/../../..'.format(ROOT_DIR))
@@ -245,9 +245,9 @@ async def add_speaker(promptText: str = Form(), promptWav: UploadFile = File(), 
     """添加音色接口"""
     try:
         logger.info(f"上传音色{voiceId}")
-        prompt_speech_24k = load_wav(promptWav.file, 24000)
+        prompt_speech_16k = load_wav(promptWav.file, 16000)
         # 使用frontend生成音色信息
-        cosyvoice.frontend.generate_spk_info(voiceId, promptText, prompt_speech_24k, cosyvoice.sample_rate)
+        cosyvoice.frontend.generate_spk_info(voiceId, promptText, prompt_speech_16k, cosyvoice.sample_rate, "A")
         logger.info(f"上传音色{voiceId}成功")
         return HttpResponse.success({"voiceId": voiceId})
     except Exception as e:

@@ -132,10 +132,10 @@ async def test_voice_upload():
 
     # 准备上传文件（需要一个实际的WAV文件）
     prompt_text = "希望你以后能够做的比我还好呦。。"
-    voice_id = "004"
+    voice_id = "女1"
 
     # 假设有一个测试音频文件
-    test_audio_path = "/root/PycharmProjects/CV3/async_cosyvoice/runtime/async_grpc/zero_shot_prompt.wav"
+    test_audio_path = "/root/PycharmProjects/CV3/async_cosyvoice/wav/女1.wav"
 
     data = aiohttp.FormData()
     data.add_field('promptText', prompt_text)
@@ -215,7 +215,7 @@ async def test_websocket_voip():
 
     session_id = "test_voip_session_001"
     order_id = "003"
-
+    voiceId = "女1"
     # 连接音频接收端
     receiver_uri = f"{WS_URL}/ws/audio/{session_id}"
     # 连接音频请求端
@@ -287,7 +287,7 @@ async def test_websocket_voip():
                 "event": "start",
                 "orderId": order_id,
                 "data": {
-                    "voiceId": "003",
+                    "voiceId": voiceId,
                     "inputStreaming": False,
                     "callType": "VOIP",
                     "voiceMd5": None
@@ -609,8 +609,8 @@ async def main():
     # print("\n【HTTP接口测试】")
     # await test_text_to_speech()
     # await test_text_to_speech_stream()
-    # await test_voice_upload()  # 需要准备测试音频文件
-    # await test_voice_list()
+    await test_voice_upload()  # 需要准备测试音频文件
+    await test_voice_list()
     # await test_record_upload()  # 需要准备测试音频文件
 
     # 测试WebSocket接口
