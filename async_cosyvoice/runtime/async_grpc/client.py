@@ -245,18 +245,18 @@ if __name__ == "__main__":
                         choices=['sft', 'zero_shot', 'cross_lingual', 'instruct2',
                                  'instruct2_by_spk_id', 'zero_shot_by_spk_id', 'register_spk'],
                         help='Request mode')
-    parser.add_argument('--stream_input', action="store_true", help="是否流式输入，用于双工流式")
-    parser.add_argument('--stream', action='store_true', help='是否流式输出')
+    parser.add_argument('--stream_input', default=True, action="store_true", help="是否流式输入，用于双工流式")
+    parser.add_argument('--stream', default=True, action='store_true', help='是否流式输出')
     parser.add_argument('--speed', type=float, default=1.0, help='Speed up the audio')
     parser.add_argument('--text_frontend', type=bool, default=True, help='Text frontend mode')
     parser.add_argument('--tts_text', type=str, default='运行分布式服务器的基准测试客户端，测试多 GPU 多实例并发性能')
-    parser.add_argument('--spk_id', type=str, default='003')
+    parser.add_argument('--spk_id', type=str, default='女1')
     parser.add_argument('--prompt_text', type=str, default='希望你以后能够做的比我还好呦。')
     parser.add_argument('--prompt_wav', type=str, default='zero_shot_prompt.wav')
     parser.add_argument('--format', type=str, choices=['', 'pcm'],
                         default='', help='音频输出格式[mp3, wav, pcm]，pcm可用于流式输出，目前测试客户端只支持对【 原始float32格式、Int16位pcm格式】 的音频数据处理，其他格式需自行实现转换')
     parser.add_argument('--instruct_text', type=str, default='使用四川话说')
-    parser.add_argument('--output_path', type=str, default='output/demo.wav', help='输出音频的文件名')
+    parser.add_argument('--output_path', type=str, default='/home/shao/桌面/demo.wav', help='输出音频的文件名')
     parser.add_argument('--target_sr', type=int, default=24000, help='输出音频的目标采样率 cosyvoice2 为 24000')
     parser.add_argument('--max_conc', type=int, default=5, help='最大并发数')
     parser.add_argument('--input_file', type=str, default='', help='输入需要合成音频文本的文件路径，单行文本为一个语音合成请求，将并发合成音频，并通过--max_conc设置并发数')
@@ -270,7 +270,7 @@ if __name__ == "__main__":
     except FileNotFoundError:
         start_line = 0
     with open('first_chunk.log', 'a') as f:
-        f.write(f'{"-"*20} concurrency: {args.max_conc} {"-"*20}\n')
+        f.write(f'{"-" * 20} concurrency: {args.max_conc} {"-" * 20}\n')
     start_line += 1  # 跳过分隔线
 
     if args.mode == 'register_spk':
@@ -291,9 +291,9 @@ if __name__ == "__main__":
                     # 分离文件名和扩展名，添加序号
                     if '.' in base_path:
                         name_part, ext_part = base_path.rsplit('.', 1)
-                        clone_args.output_path = f"{name_part}_{i+1}.{ext_part}"
+                        clone_args.output_path = f"{name_part}_{i + 1}.{ext_part}"
                     else:
-                        clone_args.output_path = f"{base_path}_{i+1}"
+                        clone_args.output_path = f"{base_path}_{i + 1}"
                     requests.append(clone_args)
 
                 # 并发执行
@@ -305,11 +305,12 @@ if __name__ == "__main__":
                     for i, future in enumerate(as_completed(futures)):
                         try:
                             future.result()
-                            logging.info(f'完成第 {i+1}/{args.repeat} 次执行')
+                            logging.info(f'完成第 {i + 1}/{args.repeat} 次执行')
                         except Exception as e:
-                            logging.error(f'第 {i+1} 次执行失败: {e}')
+                            logging.error(f'第 {i + 1} 次执行失败: {e}')
 
-                logging.info(f"Total time for {args.repeat} requests with concurrency {args.max_conc}: {time.monotonic() - start_time:.2f}s")
+                logging.info(
+                    f"Total time for {args.repeat} requests with concurrency {args.max_conc}: {time.monotonic() - start_time:.2f}s")
                 calculate_and_write_stats(start_line, args.max_conc)
             else:
                 asyncio.run(main(args))

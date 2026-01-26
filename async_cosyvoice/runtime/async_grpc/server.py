@@ -34,7 +34,7 @@ import torchaudio
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(f'{ROOT_DIR}/../../..')
 sys.path.append(f'{ROOT_DIR}/../../../third_party/Matcha-TTS')
-from async_cosyvoice.async_cosyvoice import AsyncCosyVoice2
+from async_cosyvoice.async_cosyvoice import AsyncCosyVoice3
 from async_cosyvoice.runtime.async_grpc.utils import convert_audio_tensor_to_bytes, convert_audio_bytes_to_tensor
 
 logging.basicConfig(level=logging.INFO,
@@ -44,14 +44,15 @@ logging.basicConfig(level=logging.INFO,
 class CosyVoiceServiceImpl(cosyvoice_pb2_grpc.CosyVoiceServicer):
     def __init__(self, args):
         try:
-            self.cosyvoice = AsyncCosyVoice2(args.model_dir, load_jit=args.load_jit, load_trt=args.load_trt,
+            self.cosyvoice = AsyncCosyVoice3(args.model_dir, load_trt=args.load_trt,
                                              fp16=args.fp16)
         except Exception as e:
             print('no valid model_type! just support AsyncCosyVoice2.')
             raise e
         logging.info('grpc service initialized')
 
-    async def RegisterSpk(self, request: cosyvoice_pb2.RegisterSpkRequest, context: aio.ServicerContext) -> cosyvoice_pb2.RegisterSpkResponse:
+    async def RegisterSpk(self, request: cosyvoice_pb2.RegisterSpkRequest,
+                          context: aio.ServicerContext) -> cosyvoice_pb2.RegisterSpkResponse:
         try:
             logging.info(f"RegisterSpk request: {request.spk_id}")
 
@@ -62,8 +63,10 @@ class CosyVoiceServiceImpl(cosyvoice_pb2_grpc.CosyVoiceServicer):
             if request.ori_sample_rate != 16000:
                 audio_data = torchaudio.functional.resample(audio_data, request.ori_sample_rate, 16000)
 
-            self.cosyvoice.frontend.generate_spk_info(request.spk_id, request.prompt_text, audio_data, self.cosyvoice.sample_rate)
-            return cosyvoice_pb2.RegisterSpkResponse(status=cosyvoice_pb2.RegisterSpkResponse.Status.OK, registered_spk_id=request.spk_id)
+            self.cosyvoice.frontend.generate_spk_info(request.spk_id, request.prompt_text, audio_data,
+                                                      self.cosyvoice.sample_rate)
+            return cosyvoice_pb2.RegisterSpkResponse(status=cosyvoice_pb2.RegisterSpkResponse.Status.OK,
+                                                     registered_spk_id=request.spk_id)
         except Exception as e:
             logging.error(f"RegisterSpk failed: {str(e)}", exc_info=True)
             return cosyvoice_pb2.RegisterSpkResponse(status=cosyvoice_pb2.RegisterSpkResponse.Status.FAILED)
@@ -262,10 +265,7 @@ if __name__ == '__main__':
     parser.add_argument('--model_dir', type=str,
                         default='../../../pretrained_models/Fun-CosyVoice3-0.5B',
                         help='local path or modelscope repo id')
-    parser.add_argument('--load_jit', action='store_true', help='load jit model')
-    parser.add_argument('--load_trt', action='store_true', help='load tensorrt model')
-    parser.add_argument('--fp16', action='store_true', help='use fp16')
+    parser.add_argument('--load_trt', default=True, action='store_true', help='load tensorrt model')
+    parser.add_argument('--fp16', default=True, action='store_true', help='use fp16')
     args = parser.parse_args()
     main(args)
-
-    # python server.py --load_jit --load_trt --fp16
