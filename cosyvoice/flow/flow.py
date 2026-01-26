@@ -401,7 +401,8 @@ class CausalMaskedDiffWithDiT(torch.nn.Module):
             spks=embedding,
             cond=conds,
             n_timesteps=10,
-            streaming=streaming
+            streaming=streaming,
+            prompt_len=mel_len1
         )
         feat = feat[:, :, mel_len1:]
         assert feat.shape[2] == mel_len2

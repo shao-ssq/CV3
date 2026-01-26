@@ -223,7 +223,7 @@ class CausalConditionalCFM(ConditionalCFM):
         self.rand_noise = torch.randn([1, 80, 50 * 300])
 
     @torch.inference_mode()
-    def forward(self, mu, mask, n_timesteps, temperature=1.0, spks=None, cond=None, streaming=False):
+    def forward(self, mu, mask, n_timesteps, temperature=1.0, spks=None, cond=None, streaming=False, prompt_len=0):
         """Forward diffusion
 
         Args:
@@ -236,6 +236,8 @@ class CausalConditionalCFM(ConditionalCFM):
             spks (torch.Tensor, optional): speaker ids. Defaults to None.
                 shape: (batch_size, spk_emb_dim)
             cond: Not used but kept for future purposes
+            streaming (bool): whether in streaming mode
+            prompt_len (int): length of prompt to preserve
 
         Returns:
             sample: generated mel-spectrogram
@@ -243,6 +245,9 @@ class CausalConditionalCFM(ConditionalCFM):
         """
 
         z = self.rand_noise[:, :, :mu.size(2)].to(mu.device).to(mu.dtype) * temperature
+        # fix prompt part: use zeros for prompt region to preserve prompt features
+        if prompt_len > 0:
+            z[:, :, :prompt_len] = 0
         # fix prompt and overlap part mu and z
         t_span = torch.linspace(0, 1, n_timesteps + 1, device=mu.device, dtype=mu.dtype)
         if self.t_scheduler == 'cosine':
