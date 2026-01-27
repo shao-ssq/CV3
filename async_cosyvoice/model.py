@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+
 os.environ.setdefault("VLLM_LOGGING_LEVEL", "ERROR")
 import queue
 import threading
@@ -18,7 +19,7 @@ from cosyvoice.flow.flow_matching import EstimatorWrapper
 from cosyvoice.hifigan.generator import HiFTGenerator, CausalHiFTGenerator
 from cosyvoice.utils.common import fade_in_out
 from cosyvoice.utils.file_utils import convert_onnx_to_trt
-from vllm import  AsyncLLMEngine
+from vllm import AsyncLLMEngine
 from vllm.engine.arg_utils import AsyncEngineArgs
 from vllm.sampling_params import SamplingParams
 
@@ -29,16 +30,20 @@ from async_cosyvoice.config import (
 )
 
 from async_cosyvoice.vllm_use_cosyvoice2_model import CosyVoice3Model as CosyVoice3LLM
+
 ModelRegistry.register_model("CosyVoice3Model", CosyVoice3LLM)
+
 
 class AsyncWrapper:
     """将一个同步生成器包装为异步生成器"""
+
     def __init__(self, obj):
         self.obj = obj
 
     async def __aiter__(self):
         for item in self.obj:
             yield item
+
 
 def tensor_to_list(tensor: torch.tensor):
     return tensor.view(-1).cpu().numpy().tolist()
@@ -307,8 +312,8 @@ class CosyVoice3Model:
                             continue
 
                         last_tokens = new_tokens
-                        # 检查是否是特殊 token (>= base_speech_token_size)
-                        if last_tokens[-1] >= self.base_speech_token_size:
+                        # 检查是否是停止token
+                        if last_tokens[-1] in [self.task_token_id, self.fill_token_id]:
                             need_add_tokens = last_tokens[:-1]
                         else:
                             need_add_tokens = last_tokens
@@ -330,8 +335,8 @@ class CosyVoice3Model:
                 if len(new_tokens) == 0:
                     continue
 
-                # 检查是否是 stop token (>= base_speech_token_size)
-                if new_tokens[-1] >= self.base_speech_token_size:
+                # 检查是否是停止token
+                if new_tokens[-1] in self.stop_token_ids:
                     need_add_tokens = new_tokens[:-1]
                 else:
                     need_add_tokens = new_tokens

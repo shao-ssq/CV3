@@ -249,8 +249,11 @@ if __name__ == "__main__":
     parser.add_argument('--stream', default=True, action='store_true', help='是否流式输出')
     parser.add_argument('--speed', type=float, default=1.0, help='Speed up the audio')
     parser.add_argument('--text_frontend', type=bool, default=True, help='Text frontend mode')
-    parser.add_argument('--tts_text', type=str, default='运行分布式服务器的基准测试客户端，测试多 GPU 多实例并发性能')
-    parser.add_argument('--spk_id', type=str, default='女1')
+    parser.add_argument('--tts_text', type=str, default='是的，我知道了，我在想办法呀，我不是之前还可以周转嘛，现在都几个月没进了嘛，周转不过来了呀。')
+    #parser.add_argument('--spk_id', type=str, default="cwl01")
+    #parser.add_argument('--spk_id', type=str, default="女1")
+    parser.add_argument('--spk_id', type=str, default="cwl01")
+    #parser.add_argument('--spk_id', type=str, default="男1")
     parser.add_argument('--prompt_text', type=str, default='希望你以后能够做的比我还好呦。')
     parser.add_argument('--prompt_wav', type=str, default='zero_shot_prompt.wav')
     parser.add_argument('--format', type=str, choices=['', 'pcm'],
