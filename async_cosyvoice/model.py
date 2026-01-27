@@ -258,20 +258,6 @@ class CosyVoice3Model:
             raise ValueError('failed to load trt {}'.format(flow_decoder_estimator_model))
         self.flow.decoder.estimator = EstimatorWrapper(self.flow.decoder.estimator_engine, estimator_count=ESTIMATOR_COUNT)
 
-    async def background_llm_inference(self, out_queue, prompt_token_ids, request_id, stop_token_ids, max_tokens):
-        sampling_params = SamplingParams(**SAMPLING_PARAMS)
-        sampling_params.stop_token_ids = stop_token_ids or [6561, 6563]
-        if max_tokens:
-            sampling_params.max_tokens = max_tokens
-        async for output in self.llm_engine.generate(
-                {
-                    "prompt_token_ids": prompt_token_ids,
-                },
-                sampling_params=sampling_params,
-                request_id=request_id or f"{time.time()}",
-        ):
-            out_queue.put((output.outputs[0], output.finished))
-
     async def llm_inference(self, prompt_token_ids: List[int], request_id: str=None, stop_token_ids=None, max_tokens=None, min_tokens=None):
         sampling_params = SamplingParams(**SAMPLING_PARAMS)
         sampling_params.stop_token_ids = stop_token_ids or self.stop_token_ids
@@ -342,7 +328,6 @@ class CosyVoice3Model:
                     need_add_tokens = new_tokens[:-1]
                 else:
                     need_add_tokens = new_tokens
-                # speech tokens 直接使用，不需要减去偏移
                 self.tts_speech_token_dict[uuid].extend(need_add_tokens)
         else:
             text = tensor_to_list(text + torch.tensor(self.llm_token_id_delta))
@@ -392,7 +377,7 @@ class CosyVoice3Model:
                                              embedding=embedding.to(self.device),
                                              streaming=stream,
                                              finalize=finalize)
-            tts_mel = tts_mel[:, :, int(token_offset * self.flow.token_mel_ratio):]
+            tts_mel = tts_mel[:, :, token_offset * self.flow.token_mel_ratio:]
             # append mel cache
             if self.hift_cache_dict[uuid] is not None:
                 hift_cache_mel = self.hift_cache_dict[uuid]['mel']
@@ -512,7 +497,6 @@ class CosyVoice3Model:
         else:
             # deal with all tokens
             await llm_task
-            logging.info(f'[PERF] non-stream llm done, wait_time: {(time.time()-tts_start_time)*1000:.1f}ms, tokens: {len(self.tts_speech_token_dict[this_uuid])}')
             t_before_token2wav = time.time()
             this_tts_speech_token = torch.tensor(self.tts_speech_token_dict[this_uuid]).unsqueeze(dim=0)
             this_tts_speech = await self._dispatch_token2wav(
