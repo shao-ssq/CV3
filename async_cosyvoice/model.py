@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+from datetime import datetime
 
 os.environ.setdefault("VLLM_LOGGING_LEVEL", "ERROR")
 import queue
@@ -105,6 +106,7 @@ class CosyVoice3Model:
         self.tts_speech_token_dict = {}
         self.llm_end_dict = {}
         self.hift_cache_dict = {}
+        self.token_count_dict = {}  # 存储每个请求的token计数列表
 
         # 与vllm中的模型保持一致 (简化的 CosyVoice3 token 编码方案)
         # - speech tokens (包括特殊token): 0 ~ 6760
@@ -141,8 +143,35 @@ class CosyVoice3Model:
                 services=TOKEN2WAV_SERVICES,
                 strategy=LOAD_BALANCE_STRATEGY,
                 timeout_ms=TOKEN2WAV_TIMEOUT_MS
-            )
+             )
             logging.info(f'Distributed mode enabled, {len(TOKEN2WAV_SERVICES)} Token2Wav services configured')
+        
+        # 初始化token日志文件
+        self._init_token_log_file()
+
+    def _init_token_log_file(self):
+        """初始化token日志文件"""
+        log_dir = os.path.join(os.path.dirname(__file__), '..', 'logs')
+        os.makedirs(log_dir, exist_ok=True)
+        
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        self.token_log_path = os.path.join(log_dir, f'token_log_{timestamp}.txt')
+        logging.info(f'Token logs will be saved to: {self.token_log_path}')
+
+    def _log_token(self, message):
+        """记录token到日志文件"""
+        try:
+            with open(self.token_log_path, 'a', encoding='utf-8') as f:
+                f.write(f"{datetime.now().isoformat()} {message}\n")
+        except Exception as e:
+            logging.error(f'Failed to write token log: {e}')
+    
+    def _log_request_start(self, uuid, text_info):
+        """记录请求开始"""
+        self._log_token(f"\n{'='*80}")
+        self._log_token(f"[REQUEST START] uuid:{uuid} time:{datetime.now().isoformat()}")
+        self._log_token(f"[REQUEST INFO] {text_info}")
+        self._log_token(f"{'='*80}")
 
     def _run_event_loop(self):
         asyncio.set_event_loop(self.background_loop)
@@ -266,27 +295,16 @@ class CosyVoice3Model:
     async def llm_job(self, text, prompt_text, llm_prompt_speech_token, llm_embedding, uuid):
         prompt_text = tensor_to_list(prompt_text + torch.tensor(self.llm_token_id_delta))
         llm_prompt_speech_token = tensor_to_list(llm_prompt_speech_token)
-
-        # 检查输入的 prompt_speech_token 范围
-        if llm_prompt_speech_token:
-            min_ps = min(llm_prompt_speech_token)
-            max_ps = max(llm_prompt_speech_token)
-            if max_ps >= self.base_speech_token_size:
-                logging.warning(f'[INPUT CHECK] WARNING: prompt_speech_token contains values >= {self.base_speech_token_size}!')
-
-        start_time = time.time()
         if isinstance(text, Union[Generator,AsyncGenerator]):
             if isinstance(text, Generator):
                 text = AsyncWrapper(text)
             last_tokens = []
             prompt_token_ids = [self.sos_eos_token_id]
             text_tokens_cache = prompt_text
-            total_text_tokens = len(prompt_text)  # 跟踪总文本token数
             async for this_text in text:
                 this_text = tensor_to_list(this_text + torch.tensor(self.llm_token_id_delta))
                 # text need tokens
                 text_tokens_cache += this_text
-                total_text_tokens += len(this_text)  # 累计文本token数
                 while len(llm_prompt_speech_token) != 0:
                     if len(text_tokens_cache) >= self.mix_ratio[0]:
                         text_input_token = text_tokens_cache[:self.mix_ratio[0]]
@@ -305,13 +323,8 @@ class CosyVoice3Model:
                             text_tokens_cache = text_tokens_cache[self.mix_ratio[0]:]
                         else:
                             continue
-                    async for output in self.llm_inference(prompt_token_ids, request_id=uuid, stop_token_ids=[self.fill_token_id]):
-                        new_tokens = list(output.token_ids)
-
-                        if len(new_tokens) == 0:
-                            continue
-
-                        last_tokens = new_tokens
+                    async for output in self.llm_inference(prompt_token_ids, request_id=uuid, stop_token_ids=self.stop_token_ids):
+                        last_tokens = output.token_ids
                         # 检查是否是停止token
                         if last_tokens[-1] in [self.task_token_id, self.fill_token_id]:
                             need_add_tokens = last_tokens[:-1]
@@ -322,19 +335,8 @@ class CosyVoice3Model:
                         prompt_token_ids.extend(need_add_tokens)
 
             prompt_token_ids += text_tokens_cache + [self.task_token_id]
-            # 计算已生成的token数，用于确定还需要生成多少
-            already_generated = len(self.tts_speech_token_dict[uuid])
-            expected_total = total_text_tokens * 2  # 预期总token数
-            remaining_min = max(0, expected_total - already_generated)  # 还需要生成的最小数量
-            async for output in self.llm_inference(prompt_token_ids, request_id=uuid,
-                                                   stop_token_ids=self.stop_token_ids,
-                                                   min_tokens=remaining_min,
-                                                   max_tokens=total_text_tokens * 20):
+            async for output in self.llm_inference(prompt_token_ids, request_id=uuid, stop_token_ids=self.stop_token_ids):
                 new_tokens = list(output.token_ids)
-
-                if len(new_tokens) == 0:
-                    continue
-
                 # 检查是否是停止token
                 if new_tokens[-1] in self.stop_token_ids:
                     need_add_tokens = new_tokens[:-1]
