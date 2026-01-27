@@ -119,8 +119,8 @@ class CosyVoice3Model:
         self.task_token_id = self.base_speech_token_size + 2     # 6563
         self.fill_token_id = self.base_speech_token_size + 3     # 6564
 
-        # stop_token_ids 包含所有200个特殊token (6561~6760)
-        self.stop_token_ids = [i for i in range(speech_token_size, speech_token_size + 200)]
+        # stop_token_ids 使用与CosyVoice相同的设置 [6561, 6563]
+        self.stop_token_ids = [6561, 6563]
 
         # vllm 的推理任务需要在一个固定的事件循环中，因此启动一个后台线程专用于推理任务
         self.background_loop = asyncio.new_event_loop()
@@ -300,15 +300,15 @@ class CosyVoice3Model:
                             text_tokens_cache = text_tokens_cache[self.mix_ratio[0]:]
                         else:
                             continue
-                    async for output in self.llm_inference(prompt_token_ids, request_id=uuid, stop_token_ids=[self.fill_token_id]):
+                    async for output in self.llm_inference(prompt_token_ids, request_id=uuid, stop_token_ids=[self.task_token_id]):
                         new_tokens = list(output.token_ids)
 
                         if len(new_tokens) == 0:
                             continue
 
                         last_tokens = new_tokens
-                        # 检查是否是特殊 token (>= base_speech_token_size)
-                        if last_tokens[-1] >= self.base_speech_token_size:
+                        # 检查是否是停止token
+                        if last_tokens[-1] in [self.task_token_id, self.fill_token_id]:
                             need_add_tokens = last_tokens[:-1]
                         else:
                             need_add_tokens = last_tokens
@@ -330,8 +330,8 @@ class CosyVoice3Model:
                 if len(new_tokens) == 0:
                     continue
 
-                # 检查是否是 stop token (>= base_speech_token_size)
-                if new_tokens[-1] >= self.base_speech_token_size:
+                # 检查是否是停止token
+                if new_tokens[-1] in self.stop_token_ids:
                     need_add_tokens = new_tokens[:-1]
                 else:
                     need_add_tokens = new_tokens
@@ -366,8 +366,27 @@ class CosyVoice3Model:
                 self.tts_speech_token_dict[uuid].extend(need_add_tokens)
 
         self.llm_end_dict[uuid] = True
+        
+        # 检查生成的token是否有效
+        generated_tokens = self.tts_speech_token_dict[uuid]
+        if generated_tokens:
+            # 检查token范围
+            valid_tokens = [t for t in generated_tokens if t < self.base_speech_token_size]
+            invalid_tokens = [t for t in generated_tokens if t >= self.base_speech_token_size]
+            
+            if invalid_tokens:
+                logging.warning(f'[TOKEN CHECK] Found {len(invalid_tokens)} invalid tokens >= {self.base_speech_token_size}')
+                logging.warning(f'[TOKEN CHECK] Invalid tokens: {invalid_tokens[:10]}...')
+                # 移除无效token
+                self.tts_speech_token_dict[uuid] = valid_tokens
+            
+            if not valid_tokens:
+                logging.error(f'[TOKEN CHECK] No valid speech tokens generated!')
+            else:
+                logging.info(f'[TOKEN CHECK] Generated {len(valid_tokens)} valid speech tokens')
+        
         logging.debug(
-            f'speech_tokens: len: {len(self.tts_speech_token_dict[uuid])}  data: {self.tts_speech_token_dict[uuid]}')
+            f'speech_tokens: len: {len(self.tts_speech_token_dict[uuid])}  data: {self.tts_speech_token_dict[uuid][:50]}...')
         # 记录 prompt_token_ids self.tts_speech_token_dict[uuid] 数据用于后续的训练，与flow推理测试
 
     def token2wav(self, token, prompt_token, prompt_feat, embedding, token_offset, uuid, stream=False, finalize=False,
