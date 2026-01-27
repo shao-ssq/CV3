@@ -261,7 +261,7 @@ if __name__ == "__main__":
     parser.add_argument('--instruct_text', type=str, default='使用四川话说')
     parser.add_argument('--output_path', type=str, default='/home/shao/桌面/demo.wav', help='输出音频的文件名')
     parser.add_argument('--target_sr', type=int, default=24000, help='输出音频的目标采样率 cosyvoice2 为 24000')
-    parser.add_argument('--max_conc', type=int, default=4, help='最大并发数')
+    parser.add_argument('--max_conc', type=int, default=1, help='最大并发数')
     parser.add_argument('--input_file', type=str, default='', help='输入需要合成音频文本的文件路径，单行文本为一个语音合成请求，将并发合成音频，并通过--max_conc设置并发数')
     parser.add_argument('--repeat', type=int, default=20, help='重复执行次数，默认为1次')
     args = parser.parse_args()
