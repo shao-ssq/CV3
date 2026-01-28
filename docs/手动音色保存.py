@@ -46,7 +46,7 @@ if __name__ == '__main__':
                       "逾期时间不按我们银行要求进行处理，我们上报您个人征信，那您的这个全款就会面临一个结清的情况。"]
         for spk_id,prompt_text, audio_path in zip(spk_ids, prompt_texts, audio_paths):
             prompt_speech_16k = load_wav(audio_path, 16000)
-            cosyvoice_instance.frontend.generate_spk_info(spk_id, "You are a helpful assistant.<|endofprompt|>" + prompt_text, prompt_speech_16k, 24000, "A")
+            cosyvoice_instance.frontend.generate_spk_info(spk_id, prompt_text, prompt_speech_16k, 24000, "A")
 
         print("Available speakers:", cosyvoice_instance.list_available_spks())
         print("Done!")
