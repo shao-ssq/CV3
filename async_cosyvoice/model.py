@@ -250,6 +250,7 @@ class CosyVoice3Model:
             raise
 
     async def llm_job(self, text, prompt_text, llm_prompt_speech_token, llm_embedding, uuid):
+        llm_start_time = time.time()
         prompt_text = tensor_to_list(prompt_text + torch.tensor(self.llm_token_id_delta))
         llm_prompt_speech_token = tensor_to_list(llm_prompt_speech_token)
 
@@ -349,12 +350,19 @@ class CosyVoice3Model:
                 self.tts_speech_token_dict[uuid].extend(need_add_tokens)
 
         self.llm_end_dict[uuid] = True
+        llm_cost_time = time.time() - llm_start_time
+        token_count = len(self.tts_speech_token_dict[uuid])
+        log_msg = 'LLM inference - tokens: {}, cost: {:.3f}s, tokens/s: {:.2f}'.format(
+            token_count, llm_cost_time, token_count/llm_cost_time if llm_cost_time > 0 else 0)
+        with open('first_chunk.log', 'a') as f:
+            f.write(f'{time.strftime("%Y-%m-%d %H:%M:%S")} {log_msg}\n')
         logging.debug(
             f'speech_tokens: len: {len(self.tts_speech_token_dict[uuid])}  data: {self.tts_speech_token_dict[uuid]}')
         # 记录 prompt_token_ids self.tts_speech_token_dict[uuid] 数据用于后续的训练，与flow推理测试
 
     def token2wav(self, token, prompt_token, prompt_feat, embedding, token_offset, uuid, stream=False, finalize=False,
                   speed=1.0):
+        token2wav_start_time = time.time()
         with torch.amp.autocast('cuda', enabled=self.fp16):
             tts_mel, _ = self.flow.inference(token=token.to(self.device, dtype=torch.int32),
                                              token_len=torch.tensor([token.shape[1]], dtype=torch.int32).to(
@@ -382,6 +390,15 @@ class CosyVoice3Model:
             tts_speech, _ = self.hift.inference(speech_feat=tts_mel, finalize=finalize)
             tts_speech = tts_speech[:, self.hift_cache_dict[uuid]['speech_offset']:]
             self.hift_cache_dict[uuid]['speech_offset'] += tts_speech.shape[1]
+
+        token2wav_cost_time = time.time() - token2wav_start_time
+        speech_len = tts_speech.shape[1] / 22050  # 假设采样率为22050
+        log_msg = 'Token2wav - tokens: {}, speech_len: {:.2f}s, cost: {:.3f}s, rtf: {:.3f}, finalize: {}'.format(
+            token.shape[1], speech_len, token2wav_cost_time,
+            token2wav_cost_time/speech_len if speech_len > 0 else 0, finalize)
+        with open('first_chunk.log', 'a') as f:
+            f.write(f'{time.strftime("%Y-%m-%d %H:%M:%S")} {log_msg}\n')
+
         return tts_speech
 
     async def _remote_token2wav(self, token, prompt_token, prompt_feat, embedding, token_offset, uuid,

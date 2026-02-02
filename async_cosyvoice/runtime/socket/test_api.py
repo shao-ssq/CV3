@@ -209,13 +209,19 @@ async def test_record_upload():
 
 # ==================== WebSocket接口示例 ====================
 
-async def test_websocket_voip():
-    """测试VOIP WebSocket接口（音频请求 + 音频接收）"""
-    print("\n=== 测试 WebSocket VOIP模式 ===")
+async def test_websocket_voip_single(session_index: int, voiceId: str = "女1"):
+    """单个VOIP WebSocket测试任务
 
-    session_id = "test_voip_session_001"
-    order_id = "003"
-    voiceId = "女1"
+    Args:
+        session_index: 会话索引
+        voiceId: 音色ID
+
+    Returns:
+        tuple: (是否成功, 耗时, 错误信息)
+    """
+    session_id = f"test_voip_session_{session_index:04d}"
+    order_id = f"order_{session_index:04d}"
+
     # 连接音频接收端
     receiver_uri = f"{WS_URL}/ws/audio/{session_id}"
     # 连接音频请求端
@@ -223,66 +229,48 @@ async def test_websocket_voip():
 
     # 获取认证headers
     auth_headers = get_auth_headers()
-    print(f"认证信息: app_id={auth_headers['app_id']}, nonce={auth_headers['nonce']}, signature={auth_headers['signature']}")
+
+    start_time = time.time()
 
     try:
         # 同时建立两个连接（带认证headers）
         async with websockets.connect(receiver_uri, extra_headers=auth_headers) as receiver_ws, \
                    websockets.connect(sender_uri, extra_headers=auth_headers) as sender_ws:
 
-            print(f"✓ WebSocket连接建立成功")
-
             # 创建接收任务
             async def receive_audio():
                 """接收音频数据"""
                 audio_chunks = []
+                first_chunk_time = None
                 while True:
                     try:
                         message = await asyncio.wait_for(receiver_ws.recv(), timeout=10.0)
                         data = json.loads(message)
                         event = data.get('event')
 
-                        print(f"  [接收端] 事件: {event}")
-
-                        if event == 'start':
-                            print(f"  [接收端] 开始接收音频")
-                        elif event == 'audio_data':
+                        if event == 'audio_data':
+                            if first_chunk_time is None:
+                                first_chunk_time = time.time()
                             audio_data = data.get('data', {}).get('audio', [])
-                            seq_no = data.get('data', {}).get('seqNo', 0)
-                            text = data.get('data', {}).get('text', '')
                             audio_chunks.append(audio_data)
-                            print(f"  [接收端] 音频块 #{seq_no}, 大小: {len(audio_data)}, 文本: {text}")
                         elif event == 'end':
-                            print(f"  [接收端] 音频接收完成，共 {len(audio_chunks)} 个块")
-                            # 保存音频文件
-                            if audio_chunks:
-                                import numpy as np
-                                # 将所有音频块合并
-                                all_audio_bytes = b''.join([bytes(chunk) for chunk in audio_chunks])
-                                output_file = f"output_voip_{session_id}.mp3"
-                                with open(output_file, "wb") as f:
-                                    f.write(all_audio_bytes)
-                                print(f"  [接收端] 音频已保存到: {output_file}, 大小: {len(all_audio_bytes)} bytes")
-                            break
+                            return True, first_chunk_time
                         elif event == 'error':
                             error_data = data.get('data', {})
-                            print(f"  [接收端] 错误: {error_data}")
-                            break
+                            return False, None
                     except asyncio.TimeoutError:
-                        print(f"  [接收端] 接收超时")
-                        break
+                        return False, None
                     except Exception as e:
-                        print(f"  [接收端] 异常: {e}")
-                        break
+                        return False, None
+                return False, None
 
             # 启动接收任务
             receive_task = asyncio.create_task(receive_audio())
 
             # 等待一小段时间确保接收端准备好
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(0.1)
 
             # 发送请求
-            print(f"  [发送端] 发送start事件")
             start_message = {
                 "event": "start",
                 "orderId": order_id,
@@ -300,8 +288,7 @@ async def test_websocket_voip():
 
             # 发送文本数据
             text_chunks = ["你好，", "这是", "VOIP", "模式", "测试。"]
-            for i, text in enumerate(text_chunks):
-                print(f"  [发送端] 发送文本块 #{i}: {text}")
+            for text in text_chunks:
                 text_message = {
                     "event": "text_data",
                     "orderId": order_id,
@@ -316,7 +303,6 @@ async def test_websocket_voip():
             await asyncio.sleep(0.05)
 
             # 发送结束事件
-            print(f"  [发送端] 发送end事件")
             end_message = {
                 "event": "end",
                 "orderId": order_id
@@ -324,12 +310,110 @@ async def test_websocket_voip():
             await sender_ws.send(json.dumps(end_message))
 
             # 等待接收完成
-            await receive_task
+            success, first_chunk_time = await receive_task
 
-            print(f"✓ VOIP模式测试完成")
+            end_time = time.time()
+            total_time = end_time - start_time
+            first_chunk_latency = first_chunk_time - start_time if first_chunk_time else None
+
+            if success:
+                return True, total_time, first_chunk_latency, None
+            else:
+                return False, total_time, None, "接收失败"
 
     except Exception as e:
-        print(f"✗ WebSocket连接失败: {e}")
+        end_time = time.time()
+        total_time = end_time - start_time
+        return False, total_time, None, str(e)
+
+
+async def test_websocket_voip(concurrency: int = 10, total: int = 100, voiceId: str = "女1"):
+    """测试VOIP WebSocket接口（支持并发测试）
+
+    Args:
+        concurrency: 并发数
+        total: 总请求数
+        voiceId: 音色ID
+    """
+    print("\n=== 测试 WebSocket VOIP模式（并发测试） ===")
+    print(f"并发数: {concurrency}")
+    print(f"总请求数: {total}")
+    print(f"音色ID: {voiceId}")
+    print("=" * 60)
+
+    # 信号量控制并发
+    semaphore = asyncio.Semaphore(concurrency)
+
+    # 统计信息
+    success_count = 0
+    fail_count = 0
+    total_times = []
+    first_chunk_latencies = []
+    errors = []
+
+    async def worker(index: int):
+        """工作协程"""
+        nonlocal success_count, fail_count
+
+        async with semaphore:
+            success, total_time, first_chunk_latency, error = await test_websocket_voip_single(index, voiceId)
+
+            if success:
+                success_count += 1
+                total_times.append(total_time)
+                if first_chunk_latency:
+                    first_chunk_latencies.append(first_chunk_latency)
+                print(f"✓ [{index+1}/{total}] 成功 - 总耗时: {total_time:.3f}s, 首包延迟: {first_chunk_latency:.3f}s" if first_chunk_latency else f"✓ [{index+1}/{total}] 成功 - 总耗时: {total_time:.3f}s")
+            else:
+                fail_count += 1
+                errors.append(error)
+                print(f"✗ [{index+1}/{total}] 失败 - 耗时: {total_time:.3f}s, 错误: {error}")
+
+    # 记录开始时间
+    overall_start = time.time()
+
+    # 创建所有任务
+    tasks = [worker(i) for i in range(total)]
+
+    # 执行所有任务
+    await asyncio.gather(*tasks)
+
+    # 记录结束时间
+    overall_end = time.time()
+    overall_time = overall_end - overall_start
+
+    # 打印统计信息
+    print("\n" + "=" * 60)
+    print("测试统计")
+    print("=" * 60)
+    print(f"总请求数: {total}")
+    print(f"成功数: {success_count}")
+    print(f"失败数: {fail_count}")
+    print(f"成功率: {success_count/total*100:.2f}%")
+    print(f"总耗时: {overall_time:.3f}s")
+    print(f"QPS: {total/overall_time:.2f}")
+
+    if total_times:
+        print(f"\n请求耗时统计:")
+        print(f"  平均耗时: {sum(total_times)/len(total_times):.3f}s")
+        print(f"  最小耗时: {min(total_times):.3f}s")
+        print(f"  最大耗时: {max(total_times):.3f}s")
+
+    if first_chunk_latencies:
+        print(f"\n首包延迟统计:")
+        print(f"  平均延迟: {sum(first_chunk_latencies)/len(first_chunk_latencies):.3f}s")
+        print(f"  最小延迟: {min(first_chunk_latencies):.3f}s")
+        print(f"  最大延迟: {max(first_chunk_latencies):.3f}s")
+
+    if errors:
+        print(f"\n错误统计:")
+        error_counts = {}
+        for error in errors:
+            error_counts[error] = error_counts.get(error, 0) + 1
+        for error, count in error_counts.items():
+            print(f"  {error}: {count}次")
+
+    print("=" * 60)
 
 
 async def test_websocket_outcall():
@@ -615,7 +699,8 @@ async def main():
 
     # 测试WebSocket接口
     print("\n【WebSocket接口测试】")
-    await test_websocket_voip()
+    # 并发测试：并发数=10，总请求数=100
+    await test_websocket_voip(concurrency=4, total=100, voiceId="女1")
     # await test_websocket_outcall()
     # await test_websocket_streaming()
     # await test_websocket_cancel()
