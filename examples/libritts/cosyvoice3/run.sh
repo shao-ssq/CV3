@@ -25,7 +25,7 @@ if [ ${stage} -le -1 ] && [ ${stop_stage} -ge -1 ]; then
   # - dev-other/test-other: 其他条件的开发/测试集
   # - train-clean-100/360: 100/360小时的干净训练集
   # - train-other-500: 500小时的其他条件训练集
-  for part in dev-clean test-clean dev-other test-other train-clean-100 train-clean-360 train-other-500; do
+  for part in dev-clean test-clean train-clean-100; do
     local/download_and_untar.sh ${data_dir} ${data_url} ${part}
   done
 fi
@@ -37,7 +37,7 @@ fi
 # ============================================================
 if [ ${stage} -le 0 ] && [ ${stop_stage} -ge 0 ]; then
   echo "Data preparation, prepare wav.scp/text/utt2spk/spk2utt"
-  for x in train-clean-100 train-clean-360 train-other-500 dev-clean dev-other test-clean test-other; do
+  for x in train-clean-100 dev-clean test-clean; do
     mkdir -p data/$x
     # NOTE in CosyVoice3, we add instruct in sequence
     # 为每个数据集添加指令提示词，用于引导模型生成
@@ -53,7 +53,7 @@ fi
 # NOTE embedding/token extraction is not necessary now as we support online feature extraction
 if [ ${stage} -le 3 ] && [ ${stop_stage} -ge 3 ]; then
   echo "Prepare required parquet format data, you should have prepared wav.scp/text/utt2spk/spk2utt/utt2embedding.pt/spk2embedding.pt/utt2speech_token.pt"
-  for x in train-clean-100 train-clean-360 train-other-500 dev-clean dev-other test-clean test-other; do
+  for x in train-clean-100 dev-clean test-clean; do
     mkdir -p data/$x/parquet
     # 每个parquet文件包含1000条语音，使用10个进程并行处理
     ../../../tools/make_parquet_list.py --num_utts_per_parquet 1000 \
