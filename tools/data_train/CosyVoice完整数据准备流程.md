@@ -1,11 +1,6 @@
   ## 第一步：准备原始数据
 
 ### 1.1 准备音频文件和文本
-
-**单说话人场景示例：**
-
-假设你有以下原始数据：
-
 ```
 raw_data/
 ├── audio_001.wav
@@ -104,24 +99,7 @@ python create_basic_files.py
 - `utt2embedding.pt` - 每个utterance的嵌入向量
 - `spk2embedding.pt` - 每个说话人的平均嵌入向量
 
-### 2.2 下载嵌入模型
-
-首先需要获取说话人嵌入提取模型（ONNX格式）。
-
-**方法1：从预训练模型提取**
-```bash
-# 如果已有CosyVoice预训练模型
-ls pretrained_models/CosyVoice-300M/campplus.onnx
-```
-
-**方法2：下载CamPlusPlus模型**
-```bash
-# CamPlusPlus是常用的说话人嵌入模型
-# 可以从ModelScope或Hugging Face下载
-wget https://modelscope.cn/models/xxx/campplus.onnx -O models/campplus.onnx
-```
-
-### 2.3 运行提取脚本
+### 2.2 运行提取脚本
 
 ```bash
 python tools/extract_embedding.py \
@@ -135,7 +113,7 @@ python tools/extract_embedding.py \
 - `--onnx_path`：嵌入模型的ONNX文件路径
 - `--num_thread`：并行线程数（建议4-16）
 
-### 2.4 执行过程
+### 2.3 执行过程
 
 脚本会：
 1. 读取每个音频文件
@@ -149,48 +127,6 @@ python tools/extract_embedding.py \
 ```
 100%|████████████████████| 1000/1000 [02:15<00:00,  7.38it/s]
 ```
-
-### 2.5 验证输出
-
-```bash
-ls -lh data/train/*.pt
-```
-
-应该看到：
-```
--rw-r--r-- 1 user user 245K  utt2embedding.pt
--rw-r--r-- 1 user user  3.2K  spk2embedding.pt  # 单说话人时文件很小
-```
-
-**验证内容（单说话人版本）：**
-```python
-import torch
-
-# 加载嵌入
-utt2emb = torch.load("data/train/utt2embedding.pt")
-spk2emb = torch.load("data/train/spk2embedding.pt")
-
-print(f"Utterance数量: {len(utt2emb)}")
-print(f"说话人数量: {len(spk2emb)}")
-print(f"嵌入维度: {len(list(utt2emb.values())[0])}")
-
-# ⭐ 单说话人特有检查
-print(f"\n单说话人验证:")
-print(f"说话人ID: {list(spk2emb.keys())}")
-assert len(spk2emb) == 1, "单说话人场景应该只有1个说话人嵌入！"
-print("✓ 单说话人验证通过")
-
-# 输出示例（单说话人）：
-# Utterance数量: 1000
-# 说话人数量: 1  ← 单说话人
-# 嵌入维度: 192
-#
-# 单说话人验证:
-# 说话人ID: ['my_speaker']
-# ✓ 单说话人验证通过
-```
-
----
 
 ## 第三步：提取语音Token
 
@@ -242,26 +178,6 @@ python tools/extract_speech_token.py \
 **注意：**
 - 仅支持30秒以内的音频（长音频会被跳过）
 - 需要GPU支持（使用CUDAExecutionProvider）
-
-### 3.5 验证输出
-
-```bash
-ls -lh data/train/utt2speech_token.pt
-```
-
-```python
-import torch
-
-tokens = torch.load("data/train/utt2speech_token.pt")
-print(f"Utterance数量: {len(tokens)}")
-
-# 查看某个样本的token
-utt_id = list(tokens.keys())[0]
-print(f"样本 {utt_id} 的token数量: {len(tokens[utt_id])}")
-print(f"Token序列示例: {tokens[utt_id][:10]}")
-```
-
----
 
 ## 第四步：打包成Parquet格式
 
@@ -328,41 +244,6 @@ spend time 45.2
 4. 并行生成多个parquet文件
 5. 创建 `data.list` 索引文件
 
-### 4.4 验证输出
-
-```bash
-# 查看生成的文件
-ls -lh data/train_parquet/
-
-# 查看data.list内容
-cat data/train_parquet/data.list
-```
-
-输出示例：
-```
-/absolute/path/to/data/train_parquet/parquet_000000000.tar
-/absolute/path/to/data/train_parquet/parquet_000000001.tar
-/absolute/path/to/data/train_parquet/parquet_000000002.tar
-```
-
-**验证parquet内容：**
-```python
-import pandas as pd
-
-# 读取第一个parquet文件
-df = pd.read_parquet("data/train_parquet/parquet_000000000.tar")
-
-print(f"样本数量: {len(df)}")
-print(f"列名: {df.columns.tolist()}")
-print(f"\n第一个样本:")
-print(df.iloc[0])
-
-# 输出示例：
-# 样本数量: 1000
-# 列名: ['utt', 'wav', 'audio_data', 'text', 'spk', 'utt_embedding', 'spk_embedding', 'speech_token']
-```
-
----
 
 ## 第五步：开始训练
 
@@ -396,7 +277,4 @@ torchrun --nproc_per_node=4 \
     --prefetch 100 \
     --use_amp
 ```
-
-训练将自动开始！
-
 ---
