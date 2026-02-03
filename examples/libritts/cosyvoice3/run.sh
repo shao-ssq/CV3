@@ -1,59 +1,44 @@
 #!/bin/bash
-# Copyright 2024 Alibaba Inc. All Rights Reserved.
-# CosyVoice3 LibriTTS训练流程脚本
+stage=-1
+stop_stage=-1
 
-# 加载环境变量配置
-. ./path.sh || exit 1;
+# 设置 PYTHONPATH
+export PYTHONPATH=/root/PycharmProjects/CV3:/root/PycharmProjects/CV3/third_party/Matcha-TTS:$PYTHONPATH
 
-# 流程控制参数：设置起始和结束阶段
-stage=-1          # 起始阶段（-1表示从数据下载开始）
-stop_stage=3      # 结束阶段
-
-# 数据集配置
-data_url=www.openslr.org/resources/60                              # LibriTTS数据集下载地址
-data_dir=/mnt/lyuxiang.lx/data/tts/openslr/libritts              # 数据存储目录
-pretrained_model_dir=../../../pretrained_models/Fun-CosyVoice3-0.5B  # 预训练模型路径
-
-# ============================================================
-# Stage -1: 数据下载
-# 功能：从OpenSLR下载LibriTTS数据集的各个子集
-# ============================================================
-if [ ${stage} -le -1 ] && [ ${stop_stage} -ge -1 ]; then
-  echo "Data Download"
-  # 下载LibriTTS的7个子集：
-  # - dev-clean/test-clean: 干净的开发/测试集
-  # - dev-other/test-other: 其他条件的开发/测试集
-  # - train-clean-100/360: 100/360小时的干净训练集
-  # - train-other-500: 500小时的其他条件训练集
-  for part in dev-clean test-clean train-clean-100; do
-    local/download_and_untar.sh ${data_dir} ${data_url} ${part}
-  done
+# 解析命令行参数
+if [ $# -ge 1 ]; then
+    stage=$1
+fi
+if [ $# -ge 2 ]; then
+    stop_stage=$2
 fi
 
+data_dir=/root/PycharmProjects/CV3/examples/aob/data
+pretrained_model_dir=/root/PycharmProjects/CV3/pretrained_models/Fun-CosyVoice3-0.5B
+
 # ============================================================
-# Stage 0: 数据准备
+# Stage 1: 数据准备
 # 功能：生成训练所需的基础文件（wav.scp/text/utt2spk/spk2utt）
 # 注意：CosyVoice3在序列中添加了指令（instruct）
 # ============================================================
-if [ ${stage} -le 0 ] && [ ${stop_stage} -ge 0 ]; then
+if [ ${stage} -le 1 ] && [ ${stop_stage} -ge 1 ]; then
   echo "Data preparation, prepare wav.scp/text/utt2spk/spk2utt"
-  for x in train-clean-100 dev-clean test-clean; do
+  for x in train dev test; do
     mkdir -p data/$x
-    # NOTE in CosyVoice3, we add instruct in sequence
     # 为每个数据集添加指令提示词，用于引导模型生成
-    python local/prepare_data.py --src_dir $data_dir/LibriTTS/$x --des_dir data/$x --instruct "You are a helpful assistant.<|endofprompt|>"
+    python local/prepare_data.py --src_dir $data_dir/$x --des_dir data/$x --instruct "You are a helpful assistant.<|endofprompt|>"
   done
 fi
 
 # ============================================================
-# Stage 3: 转换为Parquet格式
+# Stage 2: 转换为Parquet格式
 # 功能：将准备好的数据转换为训练所需的parquet格式
 # 注意：CosyVoice3支持在线特征提取，不再需要预先提取embedding和token
 # ============================================================
 # NOTE embedding/token extraction is not necessary now as we support online feature extraction
-if [ ${stage} -le 3 ] && [ ${stop_stage} -ge 3 ]; then
+if [ ${stage} -le 2 ] && [ ${stop_stage} -ge 2 ]; then
   echo "Prepare required parquet format data, you should have prepared wav.scp/text/utt2spk/spk2utt/utt2embedding.pt/spk2embedding.pt/utt2speech_token.pt"
-  for x in train-clean-100 dev-clean test-clean; do
+  for x in {train,dev}; do
     mkdir -p data/$x/parquet
     # 每个parquet文件包含1000条语音，使用10个进程并行处理
     ../../../tools/make_parquet_list.py --num_utts_per_parquet 1000 \
@@ -75,18 +60,19 @@ num_workers=2                                                      # 数据加�
 prefetch=100                                                       # 预取数据的批次数
 train_engine=torch_ddp                                             # 训练引擎（torch_ddp或deepspeed）
 # ============================================================
-# Stage 5: 模型训练
+# Stage 3: 模型训练
 # 功能：训练CosyVoice3的三个核心模块（llm, flow, hifigan）
 # 支持：torch_ddp和deepspeed两种训练引擎
 # ============================================================
-if [ ${stage} -le 5 ] && [ ${stop_stage} -ge 5 ]; then
+if [ ${stage} -le 3 ] && [ ${stop_stage} -ge 3 ]; then
+  pkill -9 -f "torchrun"
   echo "Run train. We only support llm traning for now"
   if [ $train_engine == 'deepspeed' ]; then
     echo "Notice deepspeed has its own optimizer config. Modify conf/ds_stage2.json if necessary"
   fi
   # 合并训练集和验证集的数据列表
-  cat data/{train-clean-100,train-clean-360,train-other-500}/parquet/data.list > data/train.data.list
-  cat data/{dev-clean,dev-other}/parquet/data.list > data/dev.data.list
+  cat data/train/parquet/data.list > data/train.data.list
+  cat data/dev/parquet/data.list > data/dev.data.list
   # 依次训练三个模块：llm（语言模型）、flow（流模型）、hifigan（声码器）
   for model in llm flow hifigan; do
     torchrun --nnodes=1 --nproc_per_node=$num_gpus \
@@ -97,7 +83,6 @@ if [ ${stage} -le 5 ] && [ ${stop_stage} -ge 5 ]; then
       --train_data data/train.data.list \
       --cv_data data/dev.data.list \
       --qwen_pretrain_path $pretrained_model_dir/CosyVoice-BlankEN \
-      --onnx_path $pretrained_model_dir \
       --model $model \
       --checkpoint $pretrained_model_dir/$model.pt \
       --model_dir `pwd`/exp/cosyvoice3/$model/$train_engine \
@@ -113,13 +98,13 @@ if [ ${stage} -le 5 ] && [ ${stop_stage} -ge 5 ]; then
 fi
 
 # ============================================================
-# Stage 6: 模型平均
+# Stage 4: 模型平均
 # 功能：对多个checkpoint进行平均，提高模型稳定性和泛化能力
 # 策略：选择验证集上表现最好的5个checkpoint进行平均
 # ============================================================
 # average model
 average_num=5  # 平均最好的5个checkpoint
-if [ ${stage} -le 6 ] && [ ${stop_stage} -ge 6 ]; then
+if [ ${stage} -le 4 ] && [ ${stop_stage} -ge 4 ]; then
   for model in llm flow hifigan; do
     decode_checkpoint=`pwd`/exp/cosyvoice/$model/$train_engine/${model}.pt
     echo "do model average and final checkpoint is $decode_checkpoint"
