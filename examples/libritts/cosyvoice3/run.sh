@@ -63,6 +63,7 @@ train_engine=torch_ddp                                             # 训练引�
 # Stage 3: 模型训练
 # 功能：训练CosyVoice3的三个核心模块（llm, flow, hifigan）
 # 支持：torch_ddp和deepspeed两种训练引擎
+# 手动修改 examples/libritts/cosyvoice3/conf/cosyvoice3.yaml 下的 qwen_pretrain_path 为实际路径
 # ============================================================
 if [ ${stage} -le 3 ] && [ ${stop_stage} -ge 3 ]; then
   pkill -9 -f "torchrun"
