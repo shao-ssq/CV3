@@ -9,7 +9,7 @@ sample_rate: 24000
 llm_input_size: 896
 llm_output_size: 896
 spk_embed_dim: 192
-qwen_pretrain_path: ''
+qwen_pretrain_path: '/root/PycharmProjects/CV3/pretrained_models/Fun-CosyVoice3-0.5B'
 token_frame_rate: 25
 token_mel_ratio: 2
 
@@ -148,9 +148,9 @@ feat_extractor: !name:matcha.utils.audio.mel_spectrogram
     center: False
 compute_fbank: !name:cosyvoice.dataset.processor.compute_fbank
     feat_extractor: !ref <feat_extractor>
-    num_frames: 960
-compute_whisper_fbank: !name:cosyvoice.dataset.processor.compute_whisper_fbank
-    num_frames: 960
+    token_mel_ratio: !ref <token_mel_ratio>
+# compute_whisper_fbank: !name:cosyvoice.dataset.processor.compute_whisper_fbank
+#     num_frames: 960
 compute_f0: !name:cosyvoice.dataset.processor.compute_f0
     sample_rate: !ref <sample_rate>
     hop_size: 480
@@ -175,7 +175,7 @@ data_pipeline: [
     !ref <resample>,
     !ref <compute_fbank>,
     !ref <parse_embedding>,
-    !ref <compute_whisper_fbank>,
+    # !ref <compute_whisper_fbank>,
     !ref <shuffle>,
     !ref <sort>,
     !ref <batch>,
@@ -204,7 +204,7 @@ train_conf:
     scheduler: constantlr # change to constantlr during sft
     scheduler_conf:
         warmup_steps: 2500
-    max_epoch: 200
+    max_epoch: 50  # 小数据集建议减少 epoch 数，避免过拟合
     grad_clip: 5
     accum_grad: 2
     log_interval: 100
@@ -220,7 +220,7 @@ train_conf_gan:
     optim_conf_d:
         lr: 0.0002 # use small lr for gan training
     scheduler_d: constantlr
-    max_epoch: 200
+    max_epoch: 50  # 小数据集建议减少 epoch 数，避免过拟合
     grad_clip: 5
     accum_grad: 1 # in gan training, accum_grad must be 1
     log_interval: 100

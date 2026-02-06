@@ -39,6 +39,7 @@ class Executor:
         '''
 
         lr = optimizer.param_groups[0]['lr']
+        info_dict['lr'] = lr  # 确保 info_dict 中有 lr 键
         logging.info('Epoch {} TRAIN info lr {} rank {}'.format(self.epoch, lr, self.rank))
         logging.info('using accumulate grad, new batch size is {} times'
                      ' larger than before'.format(info_dict['accum_grad']))
@@ -91,6 +92,7 @@ class Executor:
         '''
 
         lr = optimizer.param_groups[0]['lr']
+        info_dict['lr'] = lr  # 确保 info_dict 中有 lr 键
         logging.info('Epoch {} TRAIN info lr {} rank {}'.format(self.epoch, lr, self.rank))
         logging.info('using accumulate grad, new batch size is {} times'
                      ' larger than before'.format(info_dict['accum_grad']))
@@ -149,11 +151,12 @@ class Executor:
         '''
         logging.info('Epoch {} Step {} on_batch_end {} CV rank {}'.format(self.epoch, self.step + 1, on_batch_end, self.rank))
         model.eval()
+        # 在循环外设置这些键，避免空数据集时出现 KeyError
+        info_dict["tag"] = "CV"
+        info_dict["step"] = self.step
+        info_dict["epoch"] = self.epoch
         total_num_utts, total_loss_dict = 0, {}  # avoid division by 0
         for batch_idx, batch_dict in enumerate(cv_data_loader):
-            info_dict["tag"] = "CV"
-            info_dict["step"] = self.step
-            info_dict["epoch"] = self.epoch
             info_dict["batch_idx"] = batch_idx
 
             num_utts = len(batch_dict["utts"])
@@ -168,8 +171,10 @@ class Executor:
                     total_loss_dict[k] = []
                 total_loss_dict[k].append(v.mean().item() * num_utts)
             log_per_step(None, info_dict)
-        for k, v in total_loss_dict.items():
-            total_loss_dict[k] = sum(v) / total_num_utts
+        # 处理空数据集的情况
+        if total_num_utts > 0:
+            for k, v in total_loss_dict.items():
+                total_loss_dict[k] = sum(v) / total_num_utts
         info_dict['loss_dict'] = total_loss_dict
         log_per_save(writer, info_dict)
         model_name = 'epoch_{}_whole'.format(self.epoch) if on_batch_end else 'epoch_{}_step_{}'.format(self.epoch, self.step + 1)

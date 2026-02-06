@@ -3,7 +3,7 @@ stage=-1
 stop_stage=-1
 
 # 设置 PYTHONPATH
-export PYTHONPATH=/root/PycharmProjects/CV3:/root/PycharmProjects/CV3/third_party/Matcha-TTS:$PYTHONPATH
+export PYTHONPATH=/root/PycharmProjects/CV3:/root/PycharmProjects/CV3/third_party/Matcha-TTS:${PYTHONPATH:-}
 
 # 解析命令行参数
 if [ $# -ge 1 ]; then
@@ -73,8 +73,23 @@ if [ ${stage} -le 3 ] && [ ${stop_stage} -ge 3 ]; then
   # 合并训练集和验证集的数据列表
   cat data/train/parquet/data.list > data/train.data.list
   cat data/dev/parquet/data.list > data/dev.data.list
+
+  # 检查数据文件是否为空
+  if [ ! -s data/train.data.list ]; then
+    echo "错误：训练数据列表为空 (data/train.data.list)"
+    exit 1
+  fi
+  if [ ! -s data/dev.data.list ]; then
+    echo "错误：验证数据列表为空 (data/dev.data.list)"
+    echo "请先运行 stage 1 和 2 准备数据"
+    exit 1
+  fi
+
   # 依次训练三个模块：llm（语言模型）、flow（流模型）、hifigan（声码器）
   for model in llm flow hifigan; do
+    echo "=========================================="
+    echo "开始训练模型: $model"
+    echo "=========================================="
     torchrun --nnodes=1 --nproc_per_node=$num_gpus \
         --rdzv_id=$job_id --rdzv_backend="c10d" --rdzv_endpoint="localhost:1234" \
       ../../../cosyvoice/bin/train.py \
@@ -94,6 +109,13 @@ if [ ${stage} -le 3 ] && [ ${stop_stage} -ge 3 ]; then
       --use_amp \
       --deepspeed_config ./conf/ds_stage2.json \
       --deepspeed.save_states model+optimizer
+
+    # 检查训练是否成功
+    if [ $? -ne 0 ]; then
+      echo "错误：模型 $model 训练失败"
+      exit 1
+    fi
+    echo "模型 $model 训练完成"
   done
 fi
 
